@@ -73,6 +73,7 @@ export const salesService = {
         type: 'sale',
         full_qty_change: -item.quantity,  // vende cheio
         empty_qty_change: item.empty_qty_returned || 0, // retorna vazio
+        exchange_qty_change: 0,
         reference_id: sale.id,
         reference_type: 'sale',
         performed_by: created_by,
@@ -168,6 +169,7 @@ export const salesService = {
           type: 'adjustment',
           full_qty_change: item.quantity, // devolve cheio
           empty_qty_change: -(item.empty_qty_returned || 0),
+          exchange_qty_change: 0,
           reference_id: saleId,
           reference_type: 'sale_cancel',
           reason: 'Cancelamento de venda',

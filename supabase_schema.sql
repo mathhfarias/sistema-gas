@@ -160,8 +160,12 @@ CREATE TABLE IF NOT EXISTS stock_balances (
   product_id UUID REFERENCES products(id) ON DELETE CASCADE,
   full_qty INTEGER DEFAULT 0,
   empty_qty INTEGER DEFAULT 0,
+  exchange_qty INTEGER DEFAULT 0,
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(company_id, product_id)
+  UNIQUE(company_id, product_id),
+  CHECK (full_qty >= 0),
+  CHECK (empty_qty >= 0),
+  CHECK (exchange_qty >= 0)
 );
 
 -- ============================================================
@@ -173,10 +177,11 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   product_id UUID REFERENCES products(id),
   type TEXT NOT NULL CHECK (type IN (
     'sale','purchase','return_empty','return_full',
-    'adjustment','purchase_return','loss'
+    'adjustment','purchase_return','loss','exchange_out','exchange_in'
   )),
   full_qty_change INTEGER DEFAULT 0,
   empty_qty_change INTEGER DEFAULT 0,
+  exchange_qty_change INTEGER DEFAULT 0,
   reference_id UUID,
   reference_type TEXT,
   reason TEXT,
@@ -358,13 +363,18 @@ END $$;
 CREATE OR REPLACE FUNCTION update_stock_balance()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty)
-  VALUES (NEW.company_id, NEW.product_id, 
-          GREATEST(0, NEW.full_qty_change), 
-          GREATEST(0, NEW.empty_qty_change))
+  INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty)
+  VALUES (
+    NEW.company_id,
+    NEW.product_id,
+    GREATEST(0, COALESCE(NEW.full_qty_change, 0)),
+    GREATEST(0, COALESCE(NEW.empty_qty_change, 0)),
+    GREATEST(0, COALESCE(NEW.exchange_qty_change, 0))
+  )
   ON CONFLICT (company_id, product_id) DO UPDATE
-    SET full_qty = GREATEST(0, stock_balances.full_qty + NEW.full_qty_change),
-        empty_qty = GREATEST(0, stock_balances.empty_qty + NEW.empty_qty_change),
+    SET full_qty = GREATEST(0, stock_balances.full_qty + COALESCE(NEW.full_qty_change, 0)),
+        empty_qty = GREATEST(0, stock_balances.empty_qty + COALESCE(NEW.empty_qty_change, 0)),
+        exchange_qty = GREATEST(0, stock_balances.exchange_qty + COALESCE(NEW.exchange_qty_change, 0)),
         updated_at = NOW();
   RETURN NEW;
 END;
@@ -480,6 +490,27 @@ VALUES
   ('00000000-0000-0000-0000-000000000001', 'Botijão P13', 'P13', 110.00, 75.00, true, 13, 10),
   ('00000000-0000-0000-0000-000000000001', 'Botijão P45', 'P45', 280.00, 210.00, true, 45, 3)
 ON CONFLICT DO NOTHING;
+
+-- Estoque inicial atual da empresa
+INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty)
+SELECT '00000000-0000-0000-0000-000000000001', id, 118, 122, 7
+FROM products
+WHERE company_id = '00000000-0000-0000-0000-000000000001' AND code = 'P13'
+ON CONFLICT (company_id, product_id) DO UPDATE
+  SET full_qty = EXCLUDED.full_qty,
+      empty_qty = EXCLUDED.empty_qty,
+      exchange_qty = EXCLUDED.exchange_qty,
+      updated_at = NOW();
+
+INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty)
+SELECT '00000000-0000-0000-0000-000000000001', id, 0, 4, 0
+FROM products
+WHERE company_id = '00000000-0000-0000-0000-000000000001' AND code = 'P45'
+ON CONFLICT (company_id, product_id) DO UPDATE
+  SET full_qty = EXCLUDED.full_qty,
+      empty_qty = EXCLUDED.empty_qty,
+      exchange_qty = EXCLUDED.exchange_qty,
+      updated_at = NOW();
 
 -- Formas de pagamento
 INSERT INTO payment_methods (company_id, name, type, has_delivery_fee, delivery_fee, requires_machine)

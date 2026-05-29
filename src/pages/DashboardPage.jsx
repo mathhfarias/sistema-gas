@@ -44,7 +44,7 @@ export default function DashboardPage() {
         .lt('sold_at', tomorrow.toISOString()),
       supabase
         .from('stock_balances')
-        .select('full_qty, empty_qty, products(name, code, min_stock)')
+        .select('full_qty, empty_qty, exchange_qty, products(name, code, min_stock)')
         .eq('company_id', companyId),
       supabase
         .from('expenses')
@@ -192,34 +192,48 @@ export default function DashboardPage() {
         <h2 className="font-display text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
           Estoque de Botijões
         </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
           <StatCard
             title="P13 — Cheios"
             value={p13?.full_qty ?? 0}
-            subtitle="botijões disponíveis"
+            subtitle="disponíveis"
             icon={Boxes}
             color={p13 && p13.full_qty <= (p13.products?.min_stock || 5) ? 'red' : 'blue'}
           />
           <StatCard
             title="P13 — Vazios"
             value={p13?.empty_qty ?? 0}
-            subtitle="aguardando troca"
+            subtitle="no estoque"
             icon={Package}
             color="gray"
           />
           <StatCard
+            title="P13 — Troca"
+            value={p13?.exchange_qty ?? 0}
+            subtitle="em troca"
+            icon={Package}
+            color="orange"
+          />
+          <StatCard
             title="P45 — Cheios"
             value={p45?.full_qty ?? 0}
-            subtitle="botijões disponíveis"
+            subtitle="disponíveis"
             icon={Boxes}
             color={p45 && p45.full_qty <= (p45.products?.min_stock || 3) ? 'red' : 'orange'}
           />
           <StatCard
             title="P45 — Vazios"
             value={p45?.empty_qty ?? 0}
-            subtitle="aguardando troca"
+            subtitle="no estoque"
             icon={Package}
             color="gray"
+          />
+          <StatCard
+            title="P45 — Troca"
+            value={p45?.exchange_qty ?? 0}
+            subtitle="em troca"
+            icon={Package}
+            color="orange"
           />
         </div>
       </div>
