@@ -1,5 +1,17 @@
 import { supabase } from '../lib/supabase'
 
+function normalizeQuantity(value) {
+  const quantity = Number(value)
+  return Number.isFinite(quantity) ? Math.trunc(quantity) : 0
+}
+
+function validatePositiveQuantity(quantity, label = 'quantidade') {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return { error: { message: `Informe uma ${label} maior que zero.` } }
+  }
+  return null
+}
+
 export const stockService = {
   /**
    * Retorna saldo atual do estoque por produto.
@@ -14,6 +26,12 @@ export const stockService = {
 
   /**
    * Registra chegada de gás (compra).
+   *
+   * Regra atual:
+   * - Entrada de cheios: full_qty aumenta.
+   * - Vazios devolvidos no ato da compra: empty_qty diminui.
+   *
+   * Para troca enviada antes ao fornecedor, usar receiveFromExchange().
    */
   async registerPurchase(payload) {
     const {
@@ -44,7 +62,6 @@ export const stockService = {
 
     if (purchaseError) return { error: purchaseError }
 
-    // Itens da compra
     const purchaseItems = items.map(i => ({
       purchase_id: purchase.id,
       product_id: i.product_id,
@@ -61,18 +78,20 @@ export const stockService = {
 
     if (itemsError) return { error: itemsError }
 
-    // Movimentar estoque
     for (const item of items) {
-      await supabase.from('stock_movements').insert({
+      const { error } = await supabase.from('stock_movements').insert({
         company_id,
         product_id: item.product_id,
         type: 'purchase',
-        full_qty_change: item.quantity,        // recebe cheios
-        empty_qty_change: -(item.empty_returned || 0), // entrega vazios
+        full_qty_change: item.quantity,
+        empty_qty_change: -(item.empty_returned || 0),
+        exchange_qty_change: 0,
         reference_id: purchase.id,
         reference_type: 'purchase',
         performed_by: created_by,
       })
+
+      if (error) return { error }
     }
 
     return { data: purchase, error: null }
@@ -81,7 +100,15 @@ export const stockService = {
   /**
    * Ajuste manual de estoque.
    */
-  async manualAdjustment({ company_id, product_id, full_qty_change, empty_qty_change, reason, performed_by }) {
+  async manualAdjustment({
+    company_id,
+    product_id,
+    full_qty_change,
+    empty_qty_change,
+    exchange_qty_change,
+    reason,
+    performed_by,
+  }) {
     if (!reason?.trim()) {
       return { error: { message: 'O motivo do ajuste é obrigatório.' } }
     }
@@ -90,9 +117,52 @@ export const stockService = {
       company_id,
       product_id,
       type: 'adjustment',
-      full_qty_change: full_qty_change || 0,
-      empty_qty_change: empty_qty_change || 0,
+      full_qty_change: normalizeQuantity(full_qty_change),
+      empty_qty_change: normalizeQuantity(empty_qty_change),
+      exchange_qty_change: normalizeQuantity(exchange_qty_change),
       reason,
+      performed_by,
+    })
+  },
+
+  /**
+   * Envia botijões vazios para troca com fornecedor.
+   * Fluxo: vazios diminui, em troca aumenta.
+   */
+  async sendToExchange({ company_id, product_id, quantity, reason, performed_by }) {
+    const qty = normalizeQuantity(quantity)
+    const invalid = validatePositiveQuantity(qty)
+    if (invalid) return invalid
+
+    return supabase.from('stock_movements').insert({
+      company_id,
+      product_id,
+      type: 'exchange_out',
+      full_qty_change: 0,
+      empty_qty_change: -qty,
+      exchange_qty_change: qty,
+      reason: reason?.trim() || 'Envio de vazios para troca',
+      performed_by,
+    })
+  },
+
+  /**
+   * Recebe botijões cheios vindos da troca.
+   * Fluxo: em troca diminui, cheios aumenta.
+   */
+  async receiveFromExchange({ company_id, product_id, quantity, reason, performed_by }) {
+    const qty = normalizeQuantity(quantity)
+    const invalid = validatePositiveQuantity(qty)
+    if (invalid) return invalid
+
+    return supabase.from('stock_movements').insert({
+      company_id,
+      product_id,
+      type: 'exchange_in',
+      full_qty_change: qty,
+      empty_qty_change: 0,
+      exchange_qty_change: -qty,
+      reason: reason?.trim() || 'Recebimento de cheios da troca',
       performed_by,
     })
   },

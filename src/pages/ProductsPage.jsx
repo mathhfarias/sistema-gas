@@ -124,9 +124,27 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
       is_cylinder: isCylinder,
       is_active: isActive,
     }
-    const { error } = editing
-      ? await supabase.from('products').update(payload).eq('id', editing.id)
-      : await supabase.from('products').insert(payload)
+    let error = null
+
+    if (editing) {
+      const result = await supabase.from('products').update(payload).eq('id', editing.id)
+      error = result.error
+    } else {
+      const result = await supabase.from('products').insert(payload).select('id').single()
+      error = result.error
+
+      if (!error && result.data?.id) {
+        const stockResult = await supabase.from('stock_balances').insert({
+          company_id: companyId,
+          product_id: result.data.id,
+          full_qty: 0,
+          empty_qty: 0,
+          exchange_qty: 0,
+        })
+        error = stockResult.error
+      }
+    }
+
     setSubmitting(false)
     if (error) { toast.error(error.message); return }
     onSuccess()
