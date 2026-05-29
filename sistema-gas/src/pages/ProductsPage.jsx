@@ -51,6 +51,7 @@ export default function ProductsPage() {
                 <th>Código</th>
                 <th>Nome</th>
                 <th className="text-right">Preço Venda</th>
+                <th className="text-right">Gás do Povo</th>
                 <th className="text-right">Custo</th>
                 <th className="text-right">Margem</th>
                 <th>Estoque mín.</th>
@@ -66,6 +67,7 @@ export default function ProductsPage() {
                     <td className="font-mono text-xs text-slate-500">{p.code || '—'}</td>
                     <td className="font-medium">{p.name}</td>
                     <td className="text-right currency">{formatCurrency(p.sale_price)}</td>
+                    <td className="text-right currency">{formatCurrency(p.gas_povo_sale_price || 100.23)}</td>
                     <td className="text-right currency">{formatCurrency(p.cost_price)}</td>
                     <td className="text-right">
                       <span className={`font-semibold ${margin >= 20 ? 'text-success-600' : margin >= 10 ? 'text-warning-600' : 'text-danger-600'}`}>
@@ -80,7 +82,7 @@ export default function ProductsPage() {
                     </td>
                     <td>
                       <div className="flex gap-1.5">
-                        <button className="btn-outline btn-sm" onClick={() => { setEditing(p); setShowModal(true) }}>Editar</button>
+                        <button className="btn-outline btn-sm" onClick={() => { setEditing(p); setShowModal(true) }}>Editar valor</button>
                         <button className="btn-danger btn-sm" onClick={() => deleteProduct(p)}><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
@@ -107,6 +109,7 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
   const [name, setName] = useState(editing?.name || '')
   const [code, setCode] = useState(editing?.code || '')
   const [salePrice, setSalePrice] = useState(editing ? editing.sale_price.toFixed(2).replace('.', ',') : '')
+  const [gasPovoSalePrice, setGasPovoSalePrice] = useState(editing ? Number(editing.gas_povo_sale_price || 100.23).toFixed(2).replace('.', ',') : '100,23')
   const [costPrice, setCostPrice] = useState(editing ? editing.cost_price.toFixed(2).replace('.', ',') : '')
   const [minStock, setMinStock] = useState(editing?.min_stock || 5)
   const [isCylinder, setIsCylinder] = useState(editing?.is_cylinder !== false)
@@ -119,6 +122,7 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
     const payload = {
       company_id: companyId, name, code,
       sale_price: parseCurrency(salePrice),
+      gas_povo_sale_price: parseCurrency(gasPovoSalePrice),
       cost_price: parseCurrency(costPrice),
       min_stock: Number(minStock),
       is_cylinder: isCylinder,
@@ -173,6 +177,15 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
               <input type="text" inputMode="numeric" className="input pl-8" placeholder="0,00"
                 value={salePrice} onChange={e => setSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
             </div>
+          </div>
+          <div className="form-group">
+            <label className="label">Preço Gás do Povo *</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <input type="text" inputMode="numeric" className="input pl-8" placeholder="100,23"
+                value={gasPovoSalePrice} onChange={e => setGasPovoSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Usado automaticamente quando a forma de pagamento for Gás do Povo.</p>
           </div>
           <div className="form-group">
             <label className="label">Custo (compra)</label>
