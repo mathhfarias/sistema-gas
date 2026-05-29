@@ -14,6 +14,12 @@ const DEFAULT_ITEM = {
   empty_returned: true, empty_qty_returned: 1,
 }
 
+const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
+
+function moneyToInput(value) {
+  return Number(value || 0).toFixed(2).replace('.', ',')
+}
+
 const SALE_CHANNELS = [
   { value: 'street', label: 'Rua', icon: Truck, color: 'bg-orange-500', light: 'bg-orange-50 border-orange-300 text-orange-700' },
   { value: 'counter', label: 'Portaria', icon: Store, color: 'bg-brand-600', light: 'bg-brand-50 border-brand-300 text-brand-700' },
@@ -79,6 +85,30 @@ export default function NewSalePage() {
   const discountVal = parseCurrency(discount)
   const total = subtotal + deliveryFee - discountVal
 
+  function getProductSalePrice(prod, gasPovo = isGasPovo) {
+    if (!prod) return 0
+    if (gasPovo) return Number(prod.gas_povo_sale_price || DEFAULT_GAS_POVO_SALE_PRICE)
+    return Number(prod.sale_price || 0)
+  }
+
+  function handlePaymentMethodChange(id) {
+    setPaymentMethodId(id)
+    const selected = paymentMethods.find(p => p.id === id)
+
+    if (!selected?.requires_machine) setCardMachineId('')
+
+    if (selected?.type === 'gas_povo') {
+      setItems(prev => prev.map(item => {
+        const prod = products.find(p => p.id === item.product_id)
+        if (!prod) return item
+        return {
+          ...item,
+          unit_price: moneyToInput(getProductSalePrice(prod, true)),
+        }
+      }))
+    }
+  }
+
   function setItem(index, field, value) {
     setItems(prev => {
       const updated = [...prev]
@@ -87,7 +117,7 @@ export default function NewSalePage() {
         const prod = products.find(p => p.id === value)
         if (prod) {
           updated[index].product_name = prod.name
-          updated[index].unit_price = prod.sale_price.toFixed(2).replace('.', ',')
+          updated[index].unit_price = moneyToInput(getProductSalePrice(prod))
           updated[index].cost_price = prod.cost_price
           if (!prod.is_cylinder) {
             updated[index].empty_returned = false
@@ -110,7 +140,7 @@ export default function NewSalePage() {
     const cust = customers.find(c => c.id === id)
     if (cust) {
       setCustomerName(cust.name)
-      if (cust.default_payment_method_id) setPaymentMethodId(cust.default_payment_method_id)
+      if (cust.default_payment_method_id) handlePaymentMethodChange(cust.default_payment_method_id)
     }
   }
 
@@ -331,7 +361,7 @@ export default function NewSalePage() {
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="form-group">
               <label className="label">Forma de pagamento *</label>
-              <select className="input" value={paymentMethodId} onChange={e => setPaymentMethodId(e.target.value)} required>
+              <select className="input" value={paymentMethodId} onChange={e => handlePaymentMethodChange(e.target.value)} required>
                 <option value="">Selecionar...</option>
                 {paymentMethods.map(pm => <option key={pm.id} value={pm.id}>{pm.name}</option>)}
               </select>
@@ -349,7 +379,7 @@ export default function NewSalePage() {
 
           {isGasPovo && (
             <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700">
-              <strong>Gás do Povo:</strong> taxa de entrega de {formatCurrency(deliveryFee)} incluída automaticamente.
+              <strong>Gás do Povo:</strong> preço unitário ajustado para o valor Gás do Povo cadastrado no produto e taxa de entrega de {formatCurrency(deliveryFee)} incluída automaticamente.
             </div>
           )}
 
