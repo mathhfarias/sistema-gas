@@ -79,7 +79,7 @@ export default function NewSalePage() {
   const selectedPM = paymentMethods.find(p => p.id === paymentMethodId)
   const isGasPovo = selectedPM?.type === 'gas_povo'
   const requiresMachine = selectedPM?.requires_machine
-  const deliveryFee = isGasPovo ? Number(settings.gas_povo_delivery_fee) : 0
+  const deliveryFee = isGasPovo && channel === 'street' ? Number(settings.gas_povo_delivery_fee || 0) : 0
 
   const subtotal = items.reduce((s, i) => s + parseCurrency(i.unit_price) * (i.quantity || 1), 0)
   const discountVal = parseCurrency(discount)
@@ -379,7 +379,7 @@ export default function NewSalePage() {
 
           {isGasPovo && (
             <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700">
-              <strong>Gás do Povo:</strong> preço unitário ajustado para o valor Gás do Povo cadastrado no produto e taxa de entrega de {formatCurrency(deliveryFee)} incluída automaticamente.
+              <strong>Gás do Povo:</strong> preço unitário ajustado para o valor cadastrado no produto. A taxa de entrega só entra quando o canal for <strong>Rua</strong>.
             </div>
           )}
 
