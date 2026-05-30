@@ -1,5 +1,113 @@
 import { supabase } from '../lib/supabase'
 
+function normalizeMoney(value) {
+  return Number(value || 0)
+}
+
+function normalizeQuantity(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? Math.trunc(n) : 0
+}
+
+function aggregateSaleStock(items, multiplier = 1) {
+  const map = new Map()
+
+  for (const item of items || []) {
+    if (!item.product_id) continue
+    const current = map.get(item.product_id) || {
+      product_id: item.product_id,
+      product_name: item.product_name,
+      full_qty_change: 0,
+      empty_qty_change: 0,
+    }
+
+    current.full_qty_change += multiplier * -normalizeQuantity(item.quantity)
+    current.empty_qty_change += multiplier * normalizeQuantity(item.empty_qty_returned)
+    map.set(item.product_id, current)
+  }
+
+  return Array.from(map.values())
+}
+
+function combineStockMovements(...movementGroups) {
+  const map = new Map()
+
+  movementGroups.flat().forEach(movement => {
+    if (!movement?.product_id) return
+    const current = map.get(movement.product_id) || {
+      product_id: movement.product_id,
+      product_name: movement.product_name,
+      full_qty_change: 0,
+      empty_qty_change: 0,
+    }
+    current.full_qty_change += normalizeQuantity(movement.full_qty_change)
+    current.empty_qty_change += normalizeQuantity(movement.empty_qty_change)
+    map.set(movement.product_id, current)
+  })
+
+  return Array.from(map.values()).filter(m => m.full_qty_change !== 0 || m.empty_qty_change !== 0)
+}
+
+async function validateStock(company_id, movements) {
+  for (const movement of movements) {
+    const { data: balance, error } = await supabase
+      .from('stock_balances')
+      .select('full_qty, empty_qty, exchange_qty, products(name, code)')
+      .eq('company_id', company_id)
+      .eq('product_id', movement.product_id)
+      .maybeSingle()
+
+    if (error) return { error }
+
+    const productLabel = balance?.products?.name || movement.product_name || 'Produto'
+    const nextFull = normalizeQuantity(balance?.full_qty) + normalizeQuantity(movement.full_qty_change)
+    const nextEmpty = normalizeQuantity(balance?.empty_qty) + normalizeQuantity(movement.empty_qty_change)
+
+    if (nextFull < 0) {
+      return {
+        error: {
+          message: `Estoque insuficiente para ${productLabel}. Cheios disponíveis: ${balance?.full_qty || 0}.`,
+        },
+      }
+    }
+
+    if (nextEmpty < 0) {
+      return {
+        error: {
+          message: `Estoque de vazios insuficiente para ${productLabel}. Vazios disponíveis: ${balance?.empty_qty || 0}.`,
+        },
+      }
+    }
+  }
+
+  return { error: null }
+}
+
+function buildSaleItems(saleId, items) {
+  return (items || []).map(item => ({
+    sale_id: saleId,
+    product_id: item.product_id,
+    product_name: item.product_name,
+    quantity: normalizeQuantity(item.quantity),
+    unit_price: normalizeMoney(item.unit_price),
+    cost_price: normalizeMoney(item.cost_price),
+    discount: normalizeMoney(item.discount),
+    total: normalizeMoney(item.unit_price) * normalizeQuantity(item.quantity) - normalizeMoney(item.discount),
+    empty_returned: !!item.empty_returned,
+    empty_qty_returned: item.empty_returned ? normalizeQuantity(item.empty_qty_returned) : 0,
+  }))
+}
+
+function calculateSaleTotals(items, delivery_fee = 0, discount = 0) {
+  const subtotal = (items || []).reduce((sum, item) => {
+    return sum + normalizeMoney(item.unit_price) * normalizeQuantity(item.quantity) - normalizeMoney(item.discount)
+  }, 0)
+
+  const total = subtotal + normalizeMoney(delivery_fee) - normalizeMoney(discount)
+
+  return { subtotal, total }
+}
+
 export const salesService = {
   /**
    * Cria uma venda e movimenta o estoque automaticamente.
@@ -11,7 +119,8 @@ export const salesService = {
       customer_name,
       payment_method_id,
       card_machine_id,
-      items,           // [{ product_id, product_name, quantity, unit_price, cost_price, empty_returned, empty_qty_returned }]
+      channel = 'street',
+      items,
       delivery_fee = 0,
       discount = 0,
       notes,
@@ -19,11 +128,13 @@ export const salesService = {
       created_by,
     } = payload
 
-    // Calcular totais
-    const subtotal = items.reduce((sum, i) => sum + (i.unit_price * i.quantity - (i.discount || 0)), 0)
-    const total = subtotal + Number(delivery_fee) - Number(discount)
+    const normalizedItems = buildSaleItems(null, items)
+    const stockMovements = aggregateSaleStock(normalizedItems)
+    const stockValidation = await validateStock(company_id, stockMovements)
+    if (stockValidation.error) return stockValidation
 
-    // Inserir venda
+    const { subtotal, total } = calculateSaleTotals(normalizedItems, delivery_fee, discount)
+
     const { data: sale, error: saleError } = await supabase
       .from('sales')
       .insert({
@@ -32,6 +143,7 @@ export const salesService = {
         customer_name,
         payment_method_id,
         card_machine_id: card_machine_id || null,
+        channel,
         subtotal,
         delivery_fee,
         discount,
@@ -45,19 +157,7 @@ export const salesService = {
 
     if (saleError) return { error: saleError }
 
-    // Inserir itens
-    const saleItems = items.map(item => ({
-      sale_id: sale.id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      cost_price: item.cost_price || 0,
-      discount: item.discount || 0,
-      total: item.unit_price * item.quantity - (item.discount || 0),
-      empty_returned: item.empty_returned || false,
-      empty_qty_returned: item.empty_qty_returned || 0,
-    }))
+    const saleItems = buildSaleItems(sale.id, items)
 
     const { error: itemsError } = await supabase
       .from('sale_items')
@@ -65,41 +165,142 @@ export const salesService = {
 
     if (itemsError) return { error: itemsError }
 
-    // Movimentar estoque para cada item
-    for (const item of items) {
-      const movement = {
-        company_id,
-        product_id: item.product_id,
-        type: 'sale',
-        full_qty_change: -item.quantity,  // vende cheio
-        empty_qty_change: item.empty_qty_returned || 0, // retorna vazio
-        exchange_qty_change: 0,
-        reference_id: sale.id,
-        reference_type: 'sale',
-        performed_by: created_by,
-      }
-
+    for (const movement of stockMovements) {
       const { error: stockError } = await supabase
         .from('stock_movements')
-        .insert(movement)
+        .insert({
+          company_id,
+          product_id: movement.product_id,
+          type: 'sale',
+          full_qty_change: movement.full_qty_change,
+          empty_qty_change: movement.empty_qty_change,
+          exchange_qty_change: 0,
+          reference_id: sale.id,
+          reference_type: 'sale',
+          performed_by: created_by,
+        })
 
-      if (stockError) console.error('Erro ao movimentar estoque:', stockError)
+      if (stockError) return { error: stockError }
     }
 
     return { data: sale, error: null }
   },
 
   /**
+   * Atualiza uma venda concluída e ajusta o estoque pela diferença.
+   */
+  async updateSale(saleId, payload) {
+    const {
+      company_id,
+      customer_id,
+      customer_name,
+      payment_method_id,
+      card_machine_id,
+      channel = 'street',
+      items,
+      delivery_fee = 0,
+      discount = 0,
+      notes,
+      sold_at,
+      updated_by,
+    } = payload
+
+    const { data: oldSale, error: oldSaleError } = await supabase
+      .from('sales')
+      .select('id, sale_number, status')
+      .eq('id', saleId)
+      .eq('company_id', company_id)
+      .single()
+
+    if (oldSaleError) return { error: oldSaleError }
+    if (oldSale?.status !== 'completed') {
+      return { error: { message: 'Somente vendas concluídas podem ser alteradas.' } }
+    }
+
+    const { data: oldItems, error: oldItemsError } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('sale_id', saleId)
+
+    if (oldItemsError) return { error: oldItemsError }
+
+    const normalizedNewItems = buildSaleItems(saleId, items)
+    const reverseOld = aggregateSaleStock(oldItems || [], -1)
+    const applyNew = aggregateSaleStock(normalizedNewItems, 1)
+    const stockDiff = combineStockMovements(reverseOld, applyNew)
+
+    const stockValidation = await validateStock(company_id, stockDiff)
+    if (stockValidation.error) return stockValidation
+
+    const { subtotal, total } = calculateSaleTotals(normalizedNewItems, delivery_fee, discount)
+
+    const { error: updateError } = await supabase
+      .from('sales')
+      .update({
+        customer_id: customer_id || null,
+        customer_name,
+        payment_method_id,
+        card_machine_id: card_machine_id || null,
+        channel,
+        subtotal,
+        delivery_fee,
+        discount,
+        total,
+        notes,
+        sold_at: sold_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', saleId)
+      .eq('company_id', company_id)
+
+    if (updateError) return { error: updateError }
+
+    const { error: deleteItemsError } = await supabase
+      .from('sale_items')
+      .delete()
+      .eq('sale_id', saleId)
+
+    if (deleteItemsError) return { error: deleteItemsError }
+
+    const { error: insertItemsError } = await supabase
+      .from('sale_items')
+      .insert(normalizedNewItems)
+
+    if (insertItemsError) return { error: insertItemsError }
+
+    for (const movement of stockDiff) {
+      const { error: stockError } = await supabase
+        .from('stock_movements')
+        .insert({
+          company_id,
+          product_id: movement.product_id,
+          type: 'adjustment',
+          full_qty_change: movement.full_qty_change,
+          empty_qty_change: movement.empty_qty_change,
+          exchange_qty_change: 0,
+          reference_id: saleId,
+          reference_type: 'sale_edit',
+          reason: `Correção da venda #${oldSale.sale_number}`,
+          performed_by: updated_by,
+        })
+
+      if (stockError) return { error: stockError }
+    }
+
+    return { data: { id: saleId }, error: null }
+  },
+
+  /**
    * Busca vendas com filtros.
    */
-  async getSales({ company_id, start, end, limit = 50, offset = 0 } = {}) {
+  async getSales({ company_id, start, end, limit = 200, offset = 0 } = {}) {
     let query = supabase
       .from('sales')
       .select(`
         *,
-        payment_methods(name, type),
+        payment_methods(name, type, requires_machine),
         card_machines(name, color),
-        sale_items(*, products(name, code)),
+        sale_items(*, products(name, code, sale_price, gas_povo_sale_price, cost_price, is_cylinder)),
         profiles(full_name)
       `)
       .eq('company_id', company_id)
@@ -123,7 +324,7 @@ export const salesService = {
 
     const { data, error } = await supabase
       .from('sales')
-      .select('total, delivery_fee, subtotal, payment_methods(type, name)')
+      .select('total, delivery_fee, subtotal, sale_items(quantity), payment_methods(type, name)')
       .eq('company_id', company_id)
       .eq('status', 'completed')
       .gte('sold_at', today.toISOString())
@@ -133,7 +334,10 @@ export const salesService = {
 
     const totalRevenue = data.reduce((s, r) => s + Number(r.total), 0)
     const totalDeliveryFees = data.reduce((s, r) => s + Number(r.delivery_fee || 0), 0)
-    const totalSales = data.length
+    const totalOrders = data.length
+    const totalItems = data.reduce((s, sale) => {
+      return s + (sale.sale_items || []).reduce((si, item) => si + Number(item.quantity || 0), 0)
+    }, 0)
 
     const byPayment = {}
     data.forEach(s => {
@@ -145,7 +349,7 @@ export const salesService = {
     })
 
     return {
-      data: { totalRevenue, totalDeliveryFees, totalSales, byPayment },
+      data: { totalRevenue, totalDeliveryFees, totalOrders, totalItems, byPayment },
       error: null,
     }
   },
@@ -154,33 +358,49 @@ export const salesService = {
    * Cancela uma venda e reverte o estoque.
    */
   async cancelSale(saleId, company_id, userId) {
-    // Buscar itens da venda
-    const { data: items } = await supabase
+    const { data: sale } = await supabase
+      .from('sales')
+      .select('sale_number, status')
+      .eq('id', saleId)
+      .eq('company_id', company_id)
+      .maybeSingle()
+
+    if (sale?.status !== 'completed') {
+      return { error: { message: 'Somente vendas concluídas podem ser canceladas.' } }
+    }
+
+    const { data: items, error: itemsError } = await supabase
       .from('sale_items')
       .select('*')
       .eq('sale_id', saleId)
 
-    // Reverter estoque
-    if (items) {
-      for (const item of items) {
-        await supabase.from('stock_movements').insert({
-          company_id,
-          product_id: item.product_id,
-          type: 'adjustment',
-          full_qty_change: item.quantity, // devolve cheio
-          empty_qty_change: -(item.empty_qty_returned || 0),
-          exchange_qty_change: 0,
-          reference_id: saleId,
-          reference_type: 'sale_cancel',
-          reason: 'Cancelamento de venda',
-          performed_by: userId,
-        })
-      }
+    if (itemsError) return { error: itemsError }
+
+    const reverseMovements = aggregateSaleStock(items || [], -1)
+    const stockValidation = await validateStock(company_id, reverseMovements)
+    if (stockValidation.error) return stockValidation
+
+    for (const movement of reverseMovements) {
+      const { error: stockError } = await supabase.from('stock_movements').insert({
+        company_id,
+        product_id: movement.product_id,
+        type: 'adjustment',
+        full_qty_change: movement.full_qty_change,
+        empty_qty_change: movement.empty_qty_change,
+        exchange_qty_change: 0,
+        reference_id: saleId,
+        reference_type: 'sale_cancel',
+        reason: `Cancelamento da venda #${sale?.sale_number || ''}`.trim(),
+        performed_by: userId,
+      })
+
+      if (stockError) return { error: stockError }
     }
 
     return supabase
       .from('sales')
-      .update({ status: 'cancelled' })
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', saleId)
+      .eq('company_id', company_id)
   },
 }

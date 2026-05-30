@@ -72,7 +72,10 @@ export default function DashboardPage() {
 
     // Resumo de vendas
     const totalRevenue = sales.reduce((s, r) => s + Number(r.total), 0)
-    const totalSales = sales.length
+    const totalOrders = sales.length
+    const totalUnitsSold = sales.reduce((s, sale) => {
+      return s + (sale.sale_items || []).reduce((si, item) => si + Number(item.quantity || 0), 0)
+    }, 0)
     const cogs = sales.reduce((s, sale) => {
       return s + (sale.sale_items || []).reduce((si, item) => si + Number(item.cost_price) * Number(item.quantity), 0)
     }, 0)
@@ -91,7 +94,7 @@ export default function DashboardPage() {
     const lowStock = stock.filter(s => s.products && s.full_qty <= s.products.min_stock)
 
     setData({
-      totalRevenue, totalSales, grossProfit, cogs,
+      totalRevenue, totalOrders, totalUnitsSold, grossProfit, cogs,
       stock, lowStock,
       expenses,
       overdue: overdueRes.data || [],
@@ -157,9 +160,9 @@ export default function DashboardPage() {
       {/* Cards principais */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Vendas Hoje"
-          value={data.totalSales}
-          subtitle="pedidos concluídos"
+          title="Botijões vendidos"
+          value={data.totalUnitsSold}
+          subtitle={`${data.totalOrders} pedido(s) concluído(s)`}
           icon={ShoppingCart}
           color="blue"
         />
