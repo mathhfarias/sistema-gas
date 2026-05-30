@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useSupabaseQuery } from '../hooks/useSupabaseQuery'
 import { PageHeader, PageLoader, EmptyState, Modal, ExpenseBadge } from '../components/ui'
-import { formatCurrency, formatDate, parseCurrency, maskCurrency, EXPENSE_CATEGORIES } from '../utils/format'
+import { formatCurrency, formatDate, parseCurrency, maskCurrency, EXPENSE_CATEGORIES, PAYMENT_TYPES } from '../utils/format'
 
 const RECURRENCES = [
   { value: 'none', label: 'Sem recorrência' },
@@ -27,9 +27,19 @@ export default function ExpensesPage() {
   const { data: expenses, loading, refetch } = useSupabaseQuery(
     () => supabase
       .from('expenses')
-      .select('*')
+      .select('*, payment_methods(name, type)')
       .eq('company_id', companyId)
       .order('due_date'),
+    [companyId]
+  )
+
+  const { data: paymentMethods } = useSupabaseQuery(
+    () => supabase
+      .from('payment_methods')
+      .select('id, name, type, is_active')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('name'),
     [companyId]
   )
 
@@ -66,6 +76,7 @@ export default function ExpensesPage() {
         due_date: due.toISOString().split('T')[0],
         recurrence: exp.recurrence,
         notes: exp.notes,
+        payment_method_id: exp.payment_method_id || null,
         status: 'pending',
         created_by: exp.created_by,
       })
@@ -169,7 +180,7 @@ export default function ExpensesPage() {
                   <div className="min-w-0">
                     <p className="font-semibold text-slate-800 truncate">{exp.name}</p>
                     <p className="text-xs text-slate-500">
-                      {EXPENSE_CATEGORIES[exp.category] || exp.category} · Vence: {formatDate(exp.due_date)}
+                      {EXPENSE_CATEGORIES[exp.category] || exp.category} · Vence: {formatDate(exp.due_date)}{exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
                       {exp.recurrence && exp.recurrence !== 'none' && (
                         <span className="ml-1 text-brand-600 font-medium">
                           · {RECURRENCES.find(r => r.value === exp.recurrence)?.label}
@@ -215,6 +226,7 @@ export default function ExpensesPage() {
         editing={editing}
         companyId={companyId}
         userId={profile?.id}
+        paymentMethods={paymentMethods || []}
         onClose={() => { setShowModal(false); setEditing(null) }}
         onSuccess={() => { setShowModal(false); setEditing(null); refetch() }}
       />
@@ -222,13 +234,14 @@ export default function ExpensesPage() {
   )
 }
 
-function ExpenseModal({ open, editing, companyId, userId, onClose, onSuccess }) {
+function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], onClose, onSuccess }) {
   const [name, setName] = useState(editing?.name || '')
   const [category, setCategory] = useState(editing?.category || 'other')
   const [amount, setAmount] = useState(editing ? editing.amount.toFixed(2).replace('.', ',') : '')
   const [dueDate, setDueDate] = useState(editing?.due_date || '')
-  const [recurrence, setRecurrence] = useState(editing?.recurrence || 'monthly')
+  const [recurrence, setRecurrence] = useState(editing?.recurrence || 'none')
   const [notes, setNotes] = useState(editing?.notes || '')
+  const [paymentMethodId, setPaymentMethodId] = useState(editing?.payment_method_id || '')
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -237,7 +250,8 @@ function ExpenseModal({ open, editing, companyId, userId, onClose, onSuccess }) 
       setCategory(editing.category || 'other')
       setAmount(editing.amount?.toFixed(2).replace('.', ',') || '')
       setDueDate(editing.due_date || '')
-      setRecurrence(editing.recurrence || 'monthly')
+      setRecurrence(editing.recurrence || 'none')
+      setPaymentMethodId(editing.payment_method_id || '')
       setNotes(editing.notes || '')
     }
   }, [editing])
@@ -251,6 +265,7 @@ function ExpenseModal({ open, editing, companyId, userId, onClose, onSuccess }) 
       amount: parseCurrency(amount),
       due_date: dueDate,
       recurrence, notes,
+      payment_method_id: paymentMethodId || null,
       created_by: userId,
     }
 
@@ -302,6 +317,15 @@ function ExpenseModal({ open, editing, companyId, userId, onClose, onSuccess }) 
             <label className="label">Vencimento *</label>
             <input type="date" className="input" value={dueDate} onChange={e => setDueDate(e.target.value)} required />
           </div>
+        </div>
+        <div className="form-group">
+          <label className="label">Forma de pagamento</label>
+          <select className="input" value={paymentMethodId} onChange={e => setPaymentMethodId(e.target.value)}>
+            <option value="">Não informado</option>
+            {paymentMethods.map(pm => (
+              <option key={pm.id} value={pm.id}>{pm.name}{PAYMENT_TYPES[pm.type] ? ` (${PAYMENT_TYPES[pm.type]})` : ''}</option>
+            ))}
+          </select>
         </div>
         <div className="form-group">
           <label className="label">Observações</label>

@@ -264,6 +264,24 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+
+-- ============================================================
+-- TABELA: vehicles (veículos da empresa)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vehicles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID REFERENCES companies(id),
+  name TEXT NOT NULL,
+  type TEXT DEFAULT 'car' CHECK (type IN ('motorcycle','car','van','truck','other')),
+  plate TEXT,
+  model TEXT,
+  year INTEGER,
+  notes TEXT,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================
 -- TABELA: expenses (despesas)
 -- ============================================================
@@ -273,11 +291,14 @@ CREATE TABLE IF NOT EXISTS expenses (
   name TEXT NOT NULL,
   category TEXT DEFAULT 'other' CHECK (category IN (
     'salary','rent','electricity','water','internet',
-    'fuel','maintenance','tax','other'
+    'fuel','maintenance','tax','vehicle','other'
   )),
   amount NUMERIC(10,2) NOT NULL,
   due_date DATE NOT NULL,
-  recurrence TEXT DEFAULT 'once' CHECK (recurrence IN ('once','monthly','weekly','yearly')),
+  recurrence TEXT DEFAULT 'none' CHECK (recurrence IN ('none','once','weekly','biweekly','monthly','yearly')),
+  payment_method_id UUID REFERENCES payment_methods(id),
+  source_type TEXT,
+  source_id UUID,
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending','paid','overdue','cancelled')),
   paid_at TIMESTAMPTZ,
   paid_amount NUMERIC(10,2),
@@ -285,6 +306,35 @@ CREATE TABLE IF NOT EXISTS expenses (
   created_by UUID REFERENCES profiles(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABELA: vehicle_expenses (despesas e abastecimentos dos veículos)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vehicle_expenses (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID REFERENCES companies(id),
+  vehicle_id UUID REFERENCES vehicles(id) ON DELETE CASCADE,
+  expense_id UUID REFERENCES expenses(id) ON DELETE SET NULL,
+  payment_method_id UUID REFERENCES payment_methods(id),
+  type TEXT NOT NULL DEFAULT 'fuel' CHECK (type IN ('fuel','maintenance','document','insurance','tire','wash','other')),
+  description TEXT NOT NULL,
+  amount NUMERIC(10,2) NOT NULL DEFAULT 0,
+  expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  fuel_type TEXT CHECK (fuel_type IS NULL OR fuel_type IN ('gasoline','ethanol','diesel','diesel_s10','gnv','flex','other')),
+  liters NUMERIC(10,3),
+  unit_price NUMERIC(10,3),
+  odometer_km NUMERIC(12,1),
+  station_name TEXT,
+  station_address TEXT,
+  notes TEXT,
+  created_by UUID REFERENCES profiles(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (amount >= 0),
+  CHECK (liters IS NULL OR liters >= 0),
+  CHECK (unit_price IS NULL OR unit_price >= 0),
+  CHECK (odometer_km IS NULL OR odometer_km >= 0)
 );
 
 -- ============================================================
@@ -328,6 +378,10 @@ CREATE INDEX idx_stock_movements_company_product ON stock_movements(company_id, 
 CREATE INDEX idx_stock_movements_created_at ON stock_movements(created_at DESC);
 CREATE INDEX idx_expenses_company_due ON expenses(company_id, due_date);
 CREATE INDEX idx_expenses_status ON expenses(status);
+CREATE INDEX idx_expenses_payment_method ON expenses(payment_method_id);
+CREATE INDEX idx_vehicle_expenses_company_date ON vehicle_expenses(company_id, expense_date DESC);
+CREATE INDEX idx_vehicle_expenses_vehicle ON vehicle_expenses(vehicle_id);
+CREATE INDEX idx_vehicles_company ON vehicles(company_id);
 CREATE INDEX idx_purchases_company_date ON purchases(company_id, purchased_at DESC);
 CREATE INDEX idx_customers_company ON customers(company_id);
 
@@ -351,7 +405,7 @@ DECLARE
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'companies','profiles','products','payment_methods','card_machines',
-    'customers','suppliers','sales','purchases','expenses','settings'
+    'customers','suppliers','sales','purchases','expenses','vehicles','vehicle_expenses','settings'
   ] LOOP
     EXECUTE format('
       CREATE TRIGGER trg_%s_updated_at
@@ -432,6 +486,8 @@ ALTER TABLE sale_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE purchase_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vehicle_expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
@@ -462,7 +518,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'products','payment_methods','card_machines','customers',
     'suppliers','stock_balances','stock_movements','sales',
-    'purchases','expenses','settings','audit_logs'
+    'purchases','expenses','vehicles','vehicle_expenses','settings','audit_logs'
   ] LOOP
     EXECUTE format('
       CREATE POLICY "%s_company_isolation" ON %s
