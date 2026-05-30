@@ -13,6 +13,7 @@ import ExpensesPage from './pages/ExpensesPage'
 import ReportsPage from './pages/ReportsPage'
 import SettingsPage from './pages/SettingsPage'
 import ProductsPage from './pages/ProductsPage'
+import VehiclesPage from './pages/VehiclesPage'
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
@@ -54,6 +55,7 @@ export default function App() {
             <Route path="despesas" element={<ExpensesPage />} />
             <Route path="relatorios" element={<ReportsPage />} />
             <Route path="produtos" element={<ProductsPage />} />
+            <Route path="veiculos" element={<VehiclesPage />} />
             <Route path="configuracoes" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
