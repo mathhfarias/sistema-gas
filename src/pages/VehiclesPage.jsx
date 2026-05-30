@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Plus, Car, Bike, Truck, Fuel, Wrench, Receipt, MapPin, Gauge,
-  CalendarDays, CreditCard, Trash2, AlertTriangle,
+  CalendarDays, CreditCard, Trash2, AlertTriangle, Pencil,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
@@ -49,6 +49,8 @@ const STATUS_OPTIONS = [
   { value: 'pending', label: 'Pendente' },
 ]
 
+const VEHICLE_PAYMENT_TYPES = ['cash', 'pix', 'credit', 'debit']
+
 function currentDate() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -85,6 +87,7 @@ export default function VehiclesPage() {
   const [vehicleModalOpen, setVehicleModalOpen] = useState(false)
   const [expenseModalOpen, setExpenseModalOpen] = useState(false)
   const [selectedVehicleId, setSelectedVehicleId] = useState('')
+  const [editingVehicle, setEditingVehicle] = useState(null)
 
   const { data: vehicles, loading: vehiclesLoading, refetch: refetchVehicles } = useSupabaseQuery(
     () => supabase
@@ -92,6 +95,7 @@ export default function VehiclesPage() {
       .select('*')
       .eq('company_id', companyId)
       .eq('is_active', true)
+      .in('type', VEHICLE_PAYMENT_TYPES)
       .order('name'),
     [companyId]
   )
@@ -167,6 +171,39 @@ export default function VehiclesPage() {
     refetchExpenses()
   }
 
+  function handleNewVehicle() {
+    setEditingVehicle(null)
+    setVehicleModalOpen(true)
+  }
+
+  function handleEditVehicle(vehicle) {
+    setEditingVehicle(vehicle)
+    setVehicleModalOpen(true)
+  }
+
+  async function handleDeleteVehicle(vehicle) {
+    const vehicleItems = expenseList.filter(item => item.vehicle_id === vehicle.id)
+    const message = vehicleItems.length > 0
+      ? `O veículo "${vehicle.name}" possui ${vehicleItems.length} despesa(s) lançada(s). Ele será desativado, mantendo o histórico. Continuar?`
+      : `Excluir o veículo "${vehicle.name}"?`
+
+    if (!confirm(message)) return
+
+    const { error } = await supabase
+      .from('vehicles')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', vehicle.id)
+      .eq('company_id', companyId)
+
+    if (error) {
+      toast.error(error.message || 'Erro ao excluir veículo')
+      return
+    }
+
+    toast.success('Veículo removido da lista')
+    refetchVehicles()
+  }
+
   if (loading) return <PageLoader />
 
   return (
@@ -176,7 +213,7 @@ export default function VehiclesPage() {
         subtitle="Controle de frota, abastecimentos, quilometragem e despesas dos veículos"
         actions={
           <div className="flex flex-wrap gap-2">
-            <button className="btn-outline" onClick={() => setVehicleModalOpen(true)}>
+            <button className="btn-outline" onClick={handleNewVehicle}>
               <Car className="w-4 h-4" /> Novo Veículo
             </button>
             <button
@@ -220,7 +257,7 @@ export default function VehiclesPage() {
             icon={Car}
             title="Nenhum veículo cadastrado"
             description="Cadastre a moto, carro ou HR para começar o controle de combustível e despesas."
-            action={<button className="btn-primary btn-sm" onClick={() => setVehicleModalOpen(true)}><Plus className="w-3.5 h-3.5" /> Novo Veículo</button>}
+            action={<button className="btn-primary btn-sm" onClick={handleNewVehicle}><Plus className="w-3.5 h-3.5" /> Novo Veículo</button>}
           />
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -252,12 +289,26 @@ export default function VehiclesPage() {
                       )}
                     </div>
                   </div>
-                  <button
-                    className="btn-outline btn-sm w-full mt-4"
-                    onClick={() => { setSelectedVehicleId(vehicle.id); setExpenseModalOpen(true) }}
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Lançar despesa
-                  </button>
+                  <div className="grid grid-cols-3 gap-2 mt-4">
+                    <button
+                      className="btn-outline btn-sm col-span-3 sm:col-span-1"
+                      onClick={() => { setSelectedVehicleId(vehicle.id); setExpenseModalOpen(true) }}
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Despesa
+                    </button>
+                    <button
+                      className="btn-outline btn-sm"
+                      onClick={() => handleEditVehicle(vehicle)}
+                    >
+                      <Pencil className="w-3.5 h-3.5" /> Editar
+                    </button>
+                    <button
+                      className="btn-danger btn-sm"
+                      onClick={() => handleDeleteVehicle(vehicle)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Excluir
+                    </button>
+                  </div>
                 </div>
               )
             })}
@@ -333,8 +384,9 @@ export default function VehiclesPage() {
       <VehicleModal
         open={vehicleModalOpen}
         companyId={companyId}
-        onClose={() => setVehicleModalOpen(false)}
-        onSuccess={() => { setVehicleModalOpen(false); refetchVehicles() }}
+        vehicle={editingVehicle}
+        onClose={() => { setVehicleModalOpen(false); setEditingVehicle(null) }}
+        onSuccess={() => { setVehicleModalOpen(false); setEditingVehicle(null); refetchVehicles() }}
       />
 
       <VehicleExpenseModal
@@ -374,7 +426,7 @@ function SummaryCard({ title, value, icon: Icon, color }) {
   )
 }
 
-function VehicleModal({ open, companyId, onClose, onSuccess }) {
+function VehicleModal({ open, companyId, vehicle, onClose, onSuccess }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('motorcycle')
   const [plate, setPlate] = useState('')
@@ -383,11 +435,24 @@ function VehicleModal({ open, companyId, onClose, onSuccess }) {
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const isEditing = Boolean(vehicle?.id)
+
+  useEffect(() => {
+    if (!open) return
+
+    setName(vehicle?.name || '')
+    setType(vehicle?.type || 'motorcycle')
+    setPlate(vehicle?.plate || '')
+    setModel(vehicle?.model || '')
+    setYear(vehicle?.year ? String(vehicle.year) : '')
+    setNotes(vehicle?.notes || '')
+  }, [open, vehicle])
+
   async function handleSubmit(e) {
     e.preventDefault()
     setSubmitting(true)
 
-    const { error } = await supabase.from('vehicles').insert({
+    const payload = {
       company_id: companyId,
       name,
       type,
@@ -396,20 +461,27 @@ function VehicleModal({ open, companyId, onClose, onSuccess }) {
       year: year ? Number(year) : null,
       notes: notes || null,
       is_active: true,
-    })
+      updated_at: new Date().toISOString(),
+    }
+
+    const query = isEditing
+      ? supabase.from('vehicles').update(payload).eq('id', vehicle.id).eq('company_id', companyId)
+      : supabase.from('vehicles').insert(payload)
+
+    const { error } = await query
 
     setSubmitting(false)
     if (error) {
-      toast.error(error.message || 'Erro ao cadastrar veículo')
+      toast.error(error.message || (isEditing ? 'Erro ao atualizar veículo' : 'Erro ao cadastrar veículo'))
       return
     }
 
-    toast.success('Veículo cadastrado')
+    toast.success(isEditing ? 'Veículo atualizado' : 'Veículo cadastrado')
     onSuccess()
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Novo veículo" maxWidth="max-w-xl">
+    <Modal open={open} onClose={onClose} title={isEditing ? 'Editar veículo' : 'Novo veículo'} maxWidth="max-w-xl">
       <form onSubmit={handleSubmit} className="space-y-4">
         <FormField label="Nome do veículo" required>
           <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Moto entrega, HR, Fiorino" required />
@@ -433,7 +505,7 @@ function VehicleModal({ open, companyId, onClose, onSuccess }) {
         </FormField>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn-outline" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" disabled={submitting}>{submitting ? 'Salvando...' : 'Salvar veículo'}</button>
+          <button className="btn-primary" disabled={submitting}>{submitting ? 'Salvando...' : (isEditing ? 'Atualizar veículo' : 'Salvar veículo')}</button>
         </div>
       </form>
     </Modal>
@@ -458,7 +530,9 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   const [submitting, setSubmitting] = useState(false)
 
   const selectedVehicle = vehicles.find(v => v.id === vehicleId)
-  const paymentOptions = paymentMethods.map(pm => ({ value: pm.id, label: `${pm.name}${PAYMENT_TYPES[pm.type] ? ` (${PAYMENT_TYPES[pm.type]})` : ''}` }))
+  const paymentOptions = paymentMethods
+    .filter(pm => VEHICLE_PAYMENT_TYPES.includes(pm.type))
+    .map(pm => ({ value: pm.id, label: `${pm.name}${PAYMENT_TYPES[pm.type] ? ` (${PAYMENT_TYPES[pm.type]})` : ''}` }))
 
   function handleTypeChange(value) {
     setType(value)
