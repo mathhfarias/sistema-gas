@@ -201,6 +201,7 @@ CREATE TABLE IF NOT EXISTS sales (
   customer_name TEXT,
   payment_method_id UUID REFERENCES payment_methods(id),
   card_machine_id UUID REFERENCES card_machines(id),
+  channel TEXT DEFAULT 'street' CHECK (channel IN ('street','counter','delivery','other')),
   subtotal NUMERIC(10,2) NOT NULL DEFAULT 0,
   delivery_fee NUMERIC(10,2) DEFAULT 0,
   discount NUMERIC(10,2) DEFAULT 0,
@@ -363,20 +364,46 @@ END $$;
 -- Função para atualizar saldo de estoque
 CREATE OR REPLACE FUNCTION update_stock_balance()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_full INTEGER;
+  v_empty INTEGER;
+  v_exchange INTEGER;
 BEGIN
   INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty)
-  VALUES (
-    NEW.company_id,
-    NEW.product_id,
-    GREATEST(0, COALESCE(NEW.full_qty_change, 0)),
-    GREATEST(0, COALESCE(NEW.empty_qty_change, 0)),
-    GREATEST(0, COALESCE(NEW.exchange_qty_change, 0))
-  )
-  ON CONFLICT (company_id, product_id) DO UPDATE
-    SET full_qty = GREATEST(0, stock_balances.full_qty + COALESCE(NEW.full_qty_change, 0)),
-        empty_qty = GREATEST(0, stock_balances.empty_qty + COALESCE(NEW.empty_qty_change, 0)),
-        exchange_qty = GREATEST(0, stock_balances.exchange_qty + COALESCE(NEW.exchange_qty_change, 0)),
-        updated_at = NOW();
+  VALUES (NEW.company_id, NEW.product_id, 0, 0, 0)
+  ON CONFLICT (company_id, product_id) DO NOTHING;
+
+  SELECT full_qty, empty_qty, exchange_qty
+  INTO v_full, v_empty, v_exchange
+  FROM stock_balances
+  WHERE company_id = NEW.company_id
+    AND product_id = NEW.product_id
+  FOR UPDATE;
+
+  v_full := COALESCE(v_full, 0) + COALESCE(NEW.full_qty_change, 0);
+  v_empty := COALESCE(v_empty, 0) + COALESCE(NEW.empty_qty_change, 0);
+  v_exchange := COALESCE(v_exchange, 0) + COALESCE(NEW.exchange_qty_change, 0);
+
+  IF v_full < 0 THEN
+    RAISE EXCEPTION 'Estoque de cheios insuficiente para o produto %', NEW.product_id;
+  END IF;
+
+  IF v_empty < 0 THEN
+    RAISE EXCEPTION 'Estoque de vazios insuficiente para o produto %', NEW.product_id;
+  END IF;
+
+  IF v_exchange < 0 THEN
+    RAISE EXCEPTION 'Estoque em troca insuficiente para o produto %', NEW.product_id;
+  END IF;
+
+  UPDATE stock_balances
+  SET full_qty = v_full,
+      empty_qty = v_empty,
+      exchange_qty = v_exchange,
+      updated_at = NOW()
+  WHERE company_id = NEW.company_id
+    AND product_id = NEW.product_id;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
