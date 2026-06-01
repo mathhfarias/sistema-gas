@@ -44,7 +44,7 @@ export default function DashboardPage() {
         .lt('sold_at', tomorrow.toISOString()),
       supabase
         .from('stock_balances')
-        .select('full_qty, empty_qty, exchange_qty, products(name, code, min_stock)')
+        .select('full_qty, empty_qty, exchange_qty, hub_pending_qty, products(name, code, min_stock)')
         .eq('company_id', companyId),
       supabase
         .from('expenses')
@@ -92,10 +92,11 @@ export default function DashboardPage() {
 
     // Estoque
     const lowStock = stock.filter(s => s.products && s.full_qty <= s.products.min_stock)
+    const hubPendingQty = stock.reduce((sum, item) => sum + Number(item.hub_pending_qty || 0), 0)
 
     setData({
       totalRevenue, totalOrders, totalUnitsSold, grossProfit, cogs,
-      stock, lowStock,
+      stock, lowStock, hubPendingQty,
       expenses,
       overdue: overdueRes.data || [],
       upcoming: upcomingRes.data || [],
@@ -158,7 +159,7 @@ export default function DashboardPage() {
       )}
 
       {/* Cards principais */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Botijões vendidos"
           value={data.totalUnitsSold}
@@ -187,6 +188,13 @@ export default function DashboardPage() {
           icon={Receipt}
           color={data.overdue.length > 0 ? 'red' : 'yellow'}
           onClick={() => navigate('/despesas')}
+        />
+        <StatCard
+          title="HUB a Retornar"
+          value={data.hubPendingQty || 0}
+          subtitle="vazios para Ultragaz"
+          icon={Package}
+          color={(data.hubPendingQty || 0) > 0 ? 'purple' : 'gray'}
         />
       </div>
 

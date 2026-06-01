@@ -78,7 +78,8 @@ export default function NewSalePage() {
 
   const selectedPM = paymentMethods.find(p => p.id === paymentMethodId)
   const isGasPovo = selectedPM?.type === 'gas_povo'
-  const requiresMachine = selectedPM?.requires_machine
+  const isValeHub = selectedPM?.type === 'vale_hub'
+  const requiresMachine = selectedPM?.requires_machine && !isValeHub
   const deliveryFee = isGasPovo && channel === 'street' ? Number(settings.gas_povo_delivery_fee || 0) : 0
 
   const subtotal = items.reduce((s, i) => s + parseCurrency(i.unit_price) * (i.quantity || 1), 0)
@@ -95,7 +96,19 @@ export default function NewSalePage() {
     setPaymentMethodId(id)
     const selected = paymentMethods.find(p => p.id === id)
 
-    if (!selected?.requires_machine) setCardMachineId('')
+    if (!selected?.requires_machine || selected?.type === 'vale_hub') setCardMachineId('')
+
+    if (selected?.type === 'vale_hub') {
+      setItems(prev => prev.map(item => {
+        const prod = products.find(p => p.id === item.product_id)
+        return {
+          ...item,
+          unit_price: prod ? moneyToInput(getProductSalePrice(prod, false)) : item.unit_price,
+          empty_returned: true,
+          empty_qty_returned: Number(item.quantity || 1),
+        }
+      }))
+    }
 
     if (selected?.type === 'gas_povo') {
       setItems(prev => prev.map(item => {
@@ -126,6 +139,10 @@ export default function NewSalePage() {
         }
       }
       if (field === 'quantity' && updated[index].empty_returned) {
+        updated[index].empty_qty_returned = Number(value) || 1
+      }
+      if (field === 'quantity' && isValeHub) {
+        updated[index].empty_returned = true
         updated[index].empty_qty_returned = Number(value) || 1
       }
       if (field === 'empty_returned') {
@@ -335,12 +352,13 @@ export default function NewSalePage() {
                   {isCylinder && (
                     <div className="flex items-center gap-3 pt-1">
                       <input type="checkbox" id={`empty-${idx}`} className="w-4 h-4 rounded accent-brand-600"
-                        checked={item.empty_returned} onChange={e => setItem(idx, 'empty_returned', e.target.checked)} />
-                      <label htmlFor={`empty-${idx}`} className="text-sm text-slate-600">Retornou botijão vazio</label>
+                        checked={item.empty_returned} disabled={isValeHub} onChange={e => setItem(idx, 'empty_returned', e.target.checked)} />
+                      <label htmlFor={`empty-${idx}`} className="text-sm text-slate-600">{isValeHub ? 'Vazio vai para HUB a retornar' : 'Retornou botijão vazio'}</label>
                       {item.empty_returned && (
                         <input type="number" min="0" max={item.quantity}
                           className="input w-16 text-center ml-auto"
                           value={item.empty_qty_returned}
+                          disabled={isValeHub}
                           onChange={e => setItem(idx, 'empty_qty_returned', e.target.value)} />
                       )}
                     </div>
@@ -380,6 +398,12 @@ export default function NewSalePage() {
           {isGasPovo && (
             <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700">
               <strong>Gás do Povo:</strong> preço unitário ajustado para o valor cadastrado no produto. A taxa de entrega só entra quando o canal for <strong>Rua</strong>.
+            </div>
+          )}
+
+          {isValeHub && (
+            <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200 text-sm text-purple-700">
+              <strong>Vale Hub / Ultragaz:</strong> não usa maquininha. O vazio retornado fica separado em <strong>HUB a retornar</strong> para controle da devolução à Ultragaz.
             </div>
           )}
 

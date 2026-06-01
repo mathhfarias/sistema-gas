@@ -162,11 +162,13 @@ CREATE TABLE IF NOT EXISTS stock_balances (
   full_qty INTEGER DEFAULT 0,
   empty_qty INTEGER DEFAULT 0,
   exchange_qty INTEGER DEFAULT 0,
+  hub_pending_qty INTEGER DEFAULT 0,
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(company_id, product_id),
   CHECK (full_qty >= 0),
   CHECK (empty_qty >= 0),
-  CHECK (exchange_qty >= 0)
+  CHECK (exchange_qty >= 0),
+  CHECK (hub_pending_qty >= 0)
 );
 
 -- ============================================================
@@ -183,6 +185,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   full_qty_change INTEGER DEFAULT 0,
   empty_qty_change INTEGER DEFAULT 0,
   exchange_qty_change INTEGER DEFAULT 0,
+  hub_pending_qty_change INTEGER DEFAULT 0,
   reference_id UUID,
   reference_type TEXT,
   reason TEXT,
@@ -422,13 +425,14 @@ DECLARE
   v_full INTEGER;
   v_empty INTEGER;
   v_exchange INTEGER;
+  v_hub_pending INTEGER;
 BEGIN
-  INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty)
-  VALUES (NEW.company_id, NEW.product_id, 0, 0, 0)
+  INSERT INTO stock_balances (company_id, product_id, full_qty, empty_qty, exchange_qty, hub_pending_qty)
+  VALUES (NEW.company_id, NEW.product_id, 0, 0, 0, 0)
   ON CONFLICT (company_id, product_id) DO NOTHING;
 
-  SELECT full_qty, empty_qty, exchange_qty
-  INTO v_full, v_empty, v_exchange
+  SELECT full_qty, empty_qty, exchange_qty, hub_pending_qty
+  INTO v_full, v_empty, v_exchange, v_hub_pending
   FROM stock_balances
   WHERE company_id = NEW.company_id
     AND product_id = NEW.product_id
@@ -437,6 +441,7 @@ BEGIN
   v_full := COALESCE(v_full, 0) + COALESCE(NEW.full_qty_change, 0);
   v_empty := COALESCE(v_empty, 0) + COALESCE(NEW.empty_qty_change, 0);
   v_exchange := COALESCE(v_exchange, 0) + COALESCE(NEW.exchange_qty_change, 0);
+  v_hub_pending := COALESCE(v_hub_pending, 0) + COALESCE(NEW.hub_pending_qty_change, 0);
 
   IF v_full < 0 THEN
     RAISE EXCEPTION 'Estoque de cheios insuficiente para o produto %', NEW.product_id;
@@ -450,10 +455,15 @@ BEGIN
     RAISE EXCEPTION 'Estoque em troca insuficiente para o produto %', NEW.product_id;
   END IF;
 
+  IF v_hub_pending < 0 THEN
+    RAISE EXCEPTION 'HUB a retornar insuficiente para o produto %', NEW.product_id;
+  END IF;
+
   UPDATE stock_balances
   SET full_qty = v_full,
       empty_qty = v_empty,
       exchange_qty = v_exchange,
+      hub_pending_qty = v_hub_pending,
       updated_at = NOW()
   WHERE company_id = NEW.company_id
     AND product_id = NEW.product_id;
@@ -603,7 +613,7 @@ VALUES
   ('00000000-0000-0000-0000-000000000001', 'Pix', 'pix', false, 0, false),
   ('00000000-0000-0000-0000-000000000001', 'Cartão de Crédito', 'credit', false, 0, true),
   ('00000000-0000-0000-0000-000000000001', 'Cartão de Débito', 'debit', false, 0, true),
-  ('00000000-0000-0000-0000-000000000001', 'Vale Hub / Ultragaz', 'vale_hub', false, 0, true),
+  ('00000000-0000-0000-0000-000000000001', 'Vale Hub / Ultragaz', 'vale_hub', false, 0, false),
   ('00000000-0000-0000-0000-000000000001', 'Gás do Povo', 'gas_povo', true, 20.00, true)
 ON CONFLICT DO NOTHING;
 
