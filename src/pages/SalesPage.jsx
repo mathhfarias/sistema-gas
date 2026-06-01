@@ -326,7 +326,8 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
 
   const selectedPayment = paymentMethods.find(pm => pm.id === paymentMethodId)
   const isGasPovo = selectedPayment?.type === 'gas_povo'
-  const requiresMachine = selectedPayment?.requires_machine
+  const isValeHub = selectedPayment?.type === 'vale_hub'
+  const requiresMachine = selectedPayment?.requires_machine && !isValeHub
 
   useEffect(() => {
     if (!sale || !isGasPovo) return
@@ -354,6 +355,10 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
 
       if (field === 'quantity' && updated[index].empty_returned) {
         updated[index].empty_qty_returned = Number(value) || 0
+      }
+      if (field === 'quantity' && isValeHub) {
+        updated[index].empty_returned = true
+        updated[index].empty_qty_returned = Number(value) || 1
       }
 
       if (field === 'empty_returned') {
@@ -383,9 +388,10 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   function handlePaymentChange(id) {
     setPaymentMethodId(id)
     const selected = paymentMethods.find(pm => pm.id === id)
-    if (!selected?.requires_machine) setCardMachineId('')
+    if (!selected?.requires_machine || selected?.type === 'vale_hub') setCardMachineId('')
 
     const gasPovo = selected?.type === 'gas_povo'
+    const valeHub = selected?.type === 'vale_hub'
     setItems(prev => prev.map(item => {
       const product = products.find(p => p.id === item.product_id)
       if (!product) return item
@@ -397,6 +403,14 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
 
     if (gasPovo && channel === 'street') setDeliveryFee(moneyToInput(settings?.gas_povo_delivery_fee || 20))
     if (gasPovo && channel === 'counter') setDeliveryFee('0,00')
+    if (valeHub) {
+      setDeliveryFee('0,00')
+      setItems(prev => prev.map(item => ({
+        ...item,
+        empty_returned: true,
+        empty_qty_returned: Number(item.quantity || 1),
+      })))
+    }
   }
 
   const subtotal = items.reduce((sum, item) => sum + parseCurrency(item.unit_price) * Number(item.quantity || 0), 0)
@@ -520,10 +534,10 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
 
                   {isCylinder && (
                     <div className="flex items-center gap-3">
-                      <input type="checkbox" className="w-4 h-4 accent-brand-600" checked={item.empty_returned} onChange={e => setItem(index, 'empty_returned', e.target.checked)} />
-                      <span className="text-sm text-slate-600">Retornou vazio</span>
+                      <input type="checkbox" className="w-4 h-4 accent-brand-600" checked={item.empty_returned} disabled={isValeHub} onChange={e => setItem(index, 'empty_returned', e.target.checked)} />
+                      <span className="text-sm text-slate-600">{isValeHub ? 'Vazio vai para HUB a retornar' : 'Retornou vazio'}</span>
                       {item.empty_returned && (
-                        <input type="number" min="0" max={item.quantity} className="input w-20 text-center" value={item.empty_qty_returned} onChange={e => setItem(index, 'empty_qty_returned', e.target.value)} />
+                        <input type="number" min="0" max={item.quantity} className="input w-20 text-center" value={item.empty_qty_returned} disabled={isValeHub} onChange={e => setItem(index, 'empty_qty_returned', e.target.value)} />
                       )}
                       <span className="ml-auto text-sm font-semibold text-slate-700">Subtotal: {formatCurrency(parseCurrency(item.unit_price) * Number(item.quantity || 0))}</span>
                     </div>
@@ -557,6 +571,12 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
           {isGasPovo && (
             <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-700">
               Gás do Povo: em <strong>Rua</strong>, a taxa padrão é adicionada. Em <strong>Portaria</strong>, a taxa fica zerada.
+            </div>
+          )}
+
+          {isValeHub && (
+            <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 text-sm text-purple-700">
+              Vale Hub / Ultragaz: não usa maquininha. O vazio retornado fica separado em <strong>HUB a retornar</strong>.
             </div>
           )}
 
