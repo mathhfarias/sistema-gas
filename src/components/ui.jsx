@@ -9,6 +9,7 @@ export function StatCard({ title, value, subtitle, icon: Icon, color = 'blue', t
     green:  'bg-success-50 text-success-600',
     red:    'bg-danger-50 text-danger-600',
     yellow: 'bg-warning-50 text-warning-600',
+    purple: 'bg-purple-50 text-purple-600',
     gray:   'bg-slate-100 text-slate-500',
   }
 

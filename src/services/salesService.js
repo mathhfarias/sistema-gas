@@ -9,8 +9,9 @@ function normalizeQuantity(value) {
   return Number.isFinite(n) ? Math.trunc(n) : 0
 }
 
-function aggregateSaleStock(items, multiplier = 1) {
+function aggregateSaleStock(items, multiplier = 1, paymentType = 'other') {
   const map = new Map()
+  const isValeHub = paymentType === 'vale_hub'
 
   for (const item of items || []) {
     if (!item.product_id) continue
@@ -19,10 +20,22 @@ function aggregateSaleStock(items, multiplier = 1) {
       product_name: item.product_name,
       full_qty_change: 0,
       empty_qty_change: 0,
+      hub_pending_qty_change: 0,
     }
 
-    current.full_qty_change += multiplier * -normalizeQuantity(item.quantity)
-    current.empty_qty_change += multiplier * normalizeQuantity(item.empty_qty_returned)
+    const quantity = normalizeQuantity(item.quantity)
+    const emptyReturned = normalizeQuantity(item.empty_qty_returned)
+
+    current.full_qty_change += multiplier * -quantity
+
+    if (isValeHub) {
+      // Vale Hub / Ultragaz: o vazio retornado não entra como vazio livre.
+      // Ele fica separado como "HUB a retornar" para posterior devolução à Ultragaz.
+      current.hub_pending_qty_change += multiplier * (emptyReturned || quantity)
+    } else {
+      current.empty_qty_change += multiplier * emptyReturned
+    }
+
     map.set(item.product_id, current)
   }
 
@@ -39,20 +52,24 @@ function combineStockMovements(...movementGroups) {
       product_name: movement.product_name,
       full_qty_change: 0,
       empty_qty_change: 0,
+      hub_pending_qty_change: 0,
     }
     current.full_qty_change += normalizeQuantity(movement.full_qty_change)
     current.empty_qty_change += normalizeQuantity(movement.empty_qty_change)
+    current.hub_pending_qty_change += normalizeQuantity(movement.hub_pending_qty_change)
     map.set(movement.product_id, current)
   })
 
-  return Array.from(map.values()).filter(m => m.full_qty_change !== 0 || m.empty_qty_change !== 0)
+  return Array.from(map.values()).filter(m =>
+    m.full_qty_change !== 0 || m.empty_qty_change !== 0 || m.hub_pending_qty_change !== 0
+  )
 }
 
 async function validateStock(company_id, movements) {
   for (const movement of movements) {
     const { data: balance, error } = await supabase
       .from('stock_balances')
-      .select('full_qty, empty_qty, exchange_qty, products(name, code)')
+      .select('full_qty, empty_qty, exchange_qty, hub_pending_qty, products(name, code)')
       .eq('company_id', company_id)
       .eq('product_id', movement.product_id)
       .maybeSingle()
@@ -62,6 +79,7 @@ async function validateStock(company_id, movements) {
     const productLabel = balance?.products?.name || movement.product_name || 'Produto'
     const nextFull = normalizeQuantity(balance?.full_qty) + normalizeQuantity(movement.full_qty_change)
     const nextEmpty = normalizeQuantity(balance?.empty_qty) + normalizeQuantity(movement.empty_qty_change)
+    const nextHubPending = normalizeQuantity(balance?.hub_pending_qty) + normalizeQuantity(movement.hub_pending_qty_change)
 
     if (nextFull < 0) {
       return {
@@ -75,6 +93,14 @@ async function validateStock(company_id, movements) {
       return {
         error: {
           message: `Estoque de vazios insuficiente para ${productLabel}. Vazios disponíveis: ${balance?.empty_qty || 0}.`,
+        },
+      }
+    }
+
+    if (nextHubPending < 0) {
+      return {
+        error: {
+          message: `HUB a retornar insuficiente para ${productLabel}. Saldo atual: ${balance?.hub_pending_qty || 0}.`,
         },
       }
     }
@@ -128,8 +154,17 @@ export const salesService = {
       created_by,
     } = payload
 
+    const { data: paymentMethod, error: paymentError } = await supabase
+      .from('payment_methods')
+      .select('type, requires_machine')
+      .eq('id', payment_method_id)
+      .maybeSingle()
+
+    if (paymentError) return { error: paymentError }
+
+    const paymentType = paymentMethod?.type || 'other'
     const normalizedItems = buildSaleItems(null, items)
-    const stockMovements = aggregateSaleStock(normalizedItems)
+    const stockMovements = aggregateSaleStock(normalizedItems, 1, paymentType)
     const stockValidation = await validateStock(company_id, stockMovements)
     if (stockValidation.error) return stockValidation
 
@@ -142,7 +177,7 @@ export const salesService = {
         customer_id: customer_id || null,
         customer_name,
         payment_method_id,
-        card_machine_id: card_machine_id || null,
+        card_machine_id: paymentType === 'vale_hub' ? null : (card_machine_id || null),
         channel,
         subtotal,
         delivery_fee,
@@ -175,6 +210,7 @@ export const salesService = {
           full_qty_change: movement.full_qty_change,
           empty_qty_change: movement.empty_qty_change,
           exchange_qty_change: 0,
+          hub_pending_qty_change: movement.hub_pending_qty_change || 0,
           reference_id: sale.id,
           reference_type: 'sale',
           performed_by: created_by,
@@ -207,7 +243,7 @@ export const salesService = {
 
     const { data: oldSale, error: oldSaleError } = await supabase
       .from('sales')
-      .select('id, sale_number, status')
+      .select('id, sale_number, status, payment_methods(type)')
       .eq('id', saleId)
       .eq('company_id', company_id)
       .single()
@@ -224,9 +260,19 @@ export const salesService = {
 
     if (oldItemsError) return { error: oldItemsError }
 
+    const { data: newPaymentMethod, error: newPaymentError } = await supabase
+      .from('payment_methods')
+      .select('type, requires_machine')
+      .eq('id', payment_method_id)
+      .maybeSingle()
+
+    if (newPaymentError) return { error: newPaymentError }
+
+    const oldPaymentType = oldSale.payment_methods?.type || 'other'
+    const newPaymentType = newPaymentMethod?.type || 'other'
     const normalizedNewItems = buildSaleItems(saleId, items)
-    const reverseOld = aggregateSaleStock(oldItems || [], -1)
-    const applyNew = aggregateSaleStock(normalizedNewItems, 1)
+    const reverseOld = aggregateSaleStock(oldItems || [], -1, oldPaymentType)
+    const applyNew = aggregateSaleStock(normalizedNewItems, 1, newPaymentType)
     const stockDiff = combineStockMovements(reverseOld, applyNew)
 
     const stockValidation = await validateStock(company_id, stockDiff)
@@ -240,7 +286,7 @@ export const salesService = {
         customer_id: customer_id || null,
         customer_name,
         payment_method_id,
-        card_machine_id: card_machine_id || null,
+        card_machine_id: newPaymentType === 'vale_hub' ? null : (card_machine_id || null),
         channel,
         subtotal,
         delivery_fee,
@@ -278,6 +324,7 @@ export const salesService = {
           full_qty_change: movement.full_qty_change,
           empty_qty_change: movement.empty_qty_change,
           exchange_qty_change: 0,
+          hub_pending_qty_change: movement.hub_pending_qty_change || 0,
           reference_id: saleId,
           reference_type: 'sale_edit',
           reason: `Correção da venda #${oldSale.sale_number}`,
@@ -360,7 +407,7 @@ export const salesService = {
   async cancelSale(saleId, company_id, userId) {
     const { data: sale } = await supabase
       .from('sales')
-      .select('sale_number, status')
+      .select('sale_number, status, payment_methods(type)')
       .eq('id', saleId)
       .eq('company_id', company_id)
       .maybeSingle()
@@ -376,7 +423,8 @@ export const salesService = {
 
     if (itemsError) return { error: itemsError }
 
-    const reverseMovements = aggregateSaleStock(items || [], -1)
+    const paymentType = sale?.payment_methods?.type || 'other'
+    const reverseMovements = aggregateSaleStock(items || [], -1, paymentType)
     const stockValidation = await validateStock(company_id, reverseMovements)
     if (stockValidation.error) return stockValidation
 
@@ -388,6 +436,7 @@ export const salesService = {
         full_qty_change: movement.full_qty_change,
         empty_qty_change: movement.empty_qty_change,
         exchange_qty_change: 0,
+        hub_pending_qty_change: movement.hub_pending_qty_change || 0,
         reference_id: saleId,
         reference_type: 'sale_cancel',
         reason: `Cancelamento da venda #${sale?.sale_number || ''}`.trim(),

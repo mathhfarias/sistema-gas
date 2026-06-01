@@ -17,12 +17,28 @@ const RECURRENCES = [
 
 const CATEGORY_OPTS = Object.entries(EXPENSE_CATEGORIES).map(([value, label]) => ({ value, label }))
 
+function toMonthInput(date = new Date()) {
+  const d = typeof date === 'string' ? new Date(date) : date
+  if (!d || Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 7)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function getMonthLabel(monthValue) {
+  if (!monthValue) return 'Todos os meses'
+  const [year, month] = monthValue.split('-').map(Number)
+  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+}
+
 export default function ExpensesPage() {
   const { profile } = useAuth()
   const companyId = profile?.company_id
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [filter, setFilter] = useState('all')
+  const [selectedMonth, setSelectedMonth] = useState(toMonthInput(new Date()))
+  const [showAllMonths, setShowAllMonths] = useState(false)
 
   const { data: expenses, loading, refetch } = useSupabaseQuery(
     () => supabase
@@ -46,12 +62,15 @@ export default function ExpensesPage() {
   if (loading) return <PageLoader />
 
   const list = expenses || []
+  const monthList = showAllMonths
+    ? list
+    : list.filter(e => (e.due_date || '').slice(0, 7) === selectedMonth)
 
-  const filtered = filter === 'all' ? list : list.filter(e => e.status === filter)
+  const filtered = filter === 'all' ? monthList : monthList.filter(e => e.status === filter)
 
-  const totalPending = list.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
-  const totalPaid = list.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
-  const overdue = list.filter(e => e.status === 'overdue')
+  const totalPending = monthList.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
+  const totalPaid = monthList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
+  const overdue = monthList.filter(e => e.status === 'overdue')
 
   async function markAsPaid(exp) {
     const { error } = await supabase
@@ -102,7 +121,7 @@ export default function ExpensesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Despesas"
-        subtitle="Controle de contas a pagar"
+        subtitle={`Controle de contas a pagar — ${showAllMonths ? 'todos os meses' : getMonthLabel(selectedMonth)}`}
         actions={
           <button className="btn-primary" onClick={openNew}>
             <Plus className="w-4 h-4" /> Nova Despesa
@@ -123,6 +142,32 @@ export default function ExpensesPage() {
         <div className="card border-l-4 border-l-danger-500">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Em Atraso</p>
           <p className="text-2xl font-display font-bold text-danger-700 mt-1">{overdue.length}</p>
+        </div>
+      </div>
+
+      {/* Filtro de mês */}
+      <div className="card">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+          <div className="form-group sm:w-60">
+            <label className="label">Mês de visualização</label>
+            <input
+              type="month"
+              className="input"
+              value={selectedMonth}
+              onChange={e => { setSelectedMonth(e.target.value); setShowAllMonths(false) }}
+            />
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button className={!showAllMonths ? 'btn-primary btn-sm' : 'btn-outline btn-sm'} onClick={() => setShowAllMonths(false)}>
+              Ver mês selecionado
+            </button>
+            <button className={showAllMonths ? 'btn-primary btn-sm' : 'btn-outline btn-sm'} onClick={() => setShowAllMonths(true)}>
+              Ver todos
+            </button>
+            <button className="btn-outline btn-sm" onClick={() => { setSelectedMonth(toMonthInput(new Date())); setShowAllMonths(false) }}>
+              Mês atual
+            </button>
+          </div>
         </div>
       </div>
 
@@ -148,7 +193,7 @@ export default function ExpensesPage() {
       {filtered.length === 0 ? (
         <EmptyState
           icon={DollarSign}
-          title="Nenhuma despesa encontrada"
+          title={showAllMonths ? 'Nenhuma despesa encontrada' : `Nenhuma despesa em ${getMonthLabel(selectedMonth)}`}
           action={<button className="btn-primary btn-sm" onClick={openNew}><Plus className="w-3.5 h-3.5" /> Nova Despesa</button>}
         />
       ) : (
