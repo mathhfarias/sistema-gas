@@ -15,6 +15,7 @@ const DEFAULT_ITEM = {
 }
 
 const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
+const DEFAULT_STREET_SALE_PRICE = 125
 
 function moneyToInput(value) {
   return Number(value || 0).toFixed(2).replace('.', ',')
@@ -86,9 +87,10 @@ export default function NewSalePage() {
   const discountVal = parseCurrency(discount)
   const total = subtotal + deliveryFee - discountVal
 
-  function getProductSalePrice(prod, gasPovo = isGasPovo) {
+  function getProductSalePrice(prod, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub) {
     if (!prod) return 0
     if (gasPovo) return Number(prod.gas_povo_sale_price || DEFAULT_GAS_POVO_SALE_PRICE)
+    if (!valeHub && saleChannel === 'street') return Number(prod.street_sale_price || DEFAULT_STREET_SALE_PRICE)
     return Number(prod.sale_price || 0)
   }
 
@@ -103,7 +105,7 @@ export default function NewSalePage() {
         const prod = products.find(p => p.id === item.product_id)
         return {
           ...item,
-          unit_price: prod ? moneyToInput(getProductSalePrice(prod, false)) : item.unit_price,
+          unit_price: prod ? moneyToInput(getProductSalePrice(prod, false, channel, true)) : item.unit_price,
           empty_returned: true,
           empty_qty_returned: Number(item.quantity || 1),
         }
@@ -116,10 +118,22 @@ export default function NewSalePage() {
         if (!prod) return item
         return {
           ...item,
-          unit_price: moneyToInput(getProductSalePrice(prod, true)),
+          unit_price: moneyToInput(getProductSalePrice(prod, true, channel, false)),
         }
       }))
     }
+  }
+
+  function handleChannelChange(nextChannel) {
+    setChannel(nextChannel)
+    setItems(prev => prev.map(item => {
+      const prod = products.find(p => p.id === item.product_id)
+      if (!prod) return item
+      return {
+        ...item,
+        unit_price: moneyToInput(getProductSalePrice(prod, isGasPovo, nextChannel, isValeHub)),
+      }
+    }))
   }
 
   function setItem(index, field, value) {
@@ -253,7 +267,7 @@ export default function NewSalePage() {
                 <button
                   key={ch.value}
                   type="button"
-                  onClick={() => setChannel(ch.value)}
+                  onClick={() => handleChannelChange(ch.value)}
                   className={`flex items-center gap-3 px-4 py-3 rounded-xl border-2 transition-all font-semibold text-sm ${
                     active
                       ? `${ch.light} border-current shadow-sm`

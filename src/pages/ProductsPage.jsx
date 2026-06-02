@@ -7,6 +7,8 @@ import { useSupabaseQuery } from '../hooks/useSupabaseQuery'
 import { PageHeader, PageLoader, EmptyState, Modal } from '../components/ui'
 import { formatCurrency, parseCurrency, maskCurrency } from '../utils/format'
 
+const DEFAULT_STREET_SALE_PRICE = 125
+
 export default function ProductsPage() {
   const { profile } = useAuth()
   const companyId = profile?.company_id
@@ -51,6 +53,7 @@ export default function ProductsPage() {
                 <th>Código</th>
                 <th>Nome</th>
                 <th className="text-right">Preço Venda</th>
+                <th className="text-right">Entrega / Rua</th>
                 <th className="text-right">Gás do Povo</th>
                 <th className="text-right">Custo</th>
                 <th className="text-right">Margem</th>
@@ -67,6 +70,7 @@ export default function ProductsPage() {
                     <td className="font-mono text-xs text-slate-500">{p.code || '—'}</td>
                     <td className="font-medium">{p.name}</td>
                     <td className="text-right currency">{formatCurrency(p.sale_price)}</td>
+                    <td className="text-right currency">{formatCurrency(p.street_sale_price || DEFAULT_STREET_SALE_PRICE)}</td>
                     <td className="text-right currency">{formatCurrency(p.gas_povo_sale_price || 100.23)}</td>
                     <td className="text-right currency">{formatCurrency(p.cost_price)}</td>
                     <td className="text-right">
@@ -109,6 +113,7 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
   const [name, setName] = useState(editing?.name || '')
   const [code, setCode] = useState(editing?.code || '')
   const [salePrice, setSalePrice] = useState(editing ? editing.sale_price.toFixed(2).replace('.', ',') : '')
+  const [streetSalePrice, setStreetSalePrice] = useState(editing ? Number(editing.street_sale_price || DEFAULT_STREET_SALE_PRICE).toFixed(2).replace('.', ',') : '125,00')
   const [gasPovoSalePrice, setGasPovoSalePrice] = useState(editing ? Number(editing.gas_povo_sale_price || 100.23).toFixed(2).replace('.', ',') : '100,23')
   const [costPrice, setCostPrice] = useState(editing ? editing.cost_price.toFixed(2).replace('.', ',') : '')
   const [minStock, setMinStock] = useState(editing?.min_stock || 5)
@@ -122,6 +127,7 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
     const payload = {
       company_id: companyId, name, code,
       sale_price: parseCurrency(salePrice),
+      street_sale_price: parseCurrency(streetSalePrice),
       gas_povo_sale_price: parseCurrency(gasPovoSalePrice),
       cost_price: parseCurrency(costPrice),
       min_stock: Number(minStock),
@@ -177,6 +183,15 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
               <input type="text" inputMode="numeric" className="input pl-8" placeholder="0,00"
                 value={salePrice} onChange={e => setSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
             </div>
+          </div>
+          <div className="form-group">
+            <label className="label">Preço Entrega / Rua *</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <input type="text" inputMode="numeric" className="input pl-8" placeholder="125,00"
+                value={streetSalePrice} onChange={e => setStreetSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Usado automaticamente quando o canal de venda for Rua/entrega.</p>
           </div>
           <div className="form-group">
             <label className="label">Preço Gás do Povo *</label>
