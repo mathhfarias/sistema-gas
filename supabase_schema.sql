@@ -342,6 +342,24 @@ CREATE TABLE IF NOT EXISTS vehicle_expenses (
 );
 
 -- ============================================================
+-- TABELA: calendar_events (agenda operacional)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID REFERENCES companies(id),
+  title TEXT NOT NULL,
+  type TEXT DEFAULT 'general' CHECK (type IN ('general','bill','hub','purchase','vehicle','reminder')),
+  event_date DATE NOT NULL,
+  amount NUMERIC(10,2),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending','done','cancelled')),
+  notes TEXT,
+  created_by UUID REFERENCES profiles(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (amount IS NULL OR amount >= 0)
+);
+
+-- ============================================================
 -- TABELA: settings (configurações da empresa)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS settings (
@@ -386,6 +404,7 @@ CREATE INDEX idx_expenses_payment_method ON expenses(payment_method_id);
 CREATE INDEX idx_vehicle_expenses_company_date ON vehicle_expenses(company_id, expense_date DESC);
 CREATE INDEX idx_vehicle_expenses_vehicle ON vehicle_expenses(vehicle_id);
 CREATE INDEX idx_vehicles_company ON vehicles(company_id);
+CREATE INDEX idx_calendar_events_company_date ON calendar_events(company_id, event_date);
 CREATE INDEX idx_purchases_company_date ON purchases(company_id, purchased_at DESC);
 CREATE INDEX idx_customers_company ON customers(company_id);
 
@@ -409,7 +428,7 @@ DECLARE
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'companies','profiles','products','payment_methods','card_machines',
-    'customers','suppliers','sales','purchases','expenses','vehicles','vehicle_expenses','settings'
+    'customers','suppliers','sales','purchases','expenses','vehicles','vehicle_expenses','calendar_events','settings'
   ] LOOP
     EXECUTE format('
       CREATE TRIGGER trg_%s_updated_at
@@ -499,6 +518,7 @@ ALTER TABLE purchase_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicle_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE calendar_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
@@ -529,7 +549,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'products','payment_methods','card_machines','customers',
     'suppliers','stock_balances','stock_movements','sales',
-    'purchases','expenses','vehicles','vehicle_expenses','settings','audit_logs'
+    'purchases','expenses','vehicles','vehicle_expenses','calendar_events','settings','audit_logs'
   ] LOOP
     EXECUTE format('
       CREATE POLICY "%s_company_isolation" ON %s

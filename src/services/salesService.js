@@ -29,9 +29,12 @@ function aggregateSaleStock(items, multiplier = 1, paymentType = 'other') {
     current.full_qty_change += multiplier * -quantity
 
     if (isValeHub) {
-      // Vale Hub / Ultragaz: o vazio retornado não entra como vazio livre.
-      // Ele fica separado como "HUB a retornar" para posterior devolução à Ultragaz.
-      current.hub_pending_qty_change += multiplier * (emptyReturned || quantity)
+      // Vale Hub / Ultragaz: o vazio retornado permanece no estoque de vazios
+      // e também gera um controle paralelo em "HUB a retornar".
+      // A baixa do HUB reduz apenas o card HUB, não reduz o estoque de vazios.
+      const hubQty = emptyReturned || quantity
+      current.empty_qty_change += multiplier * hubQty
+      current.hub_pending_qty_change += multiplier * hubQty
     } else {
       current.empty_qty_change += multiplier * emptyReturned
     }
