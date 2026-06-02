@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
-import { Plus, CheckCircle, AlertTriangle, Clock, DollarSign, Trash2 } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Plus, CheckCircle, AlertTriangle, Clock, DollarSign, Trash2, Receipt } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useSupabaseQuery } from '../hooks/useSupabaseQuery'
 import { PageHeader, PageLoader, EmptyState, Modal, ExpenseBadge } from '../components/ui'
-import { formatCurrency, formatDate, parseCurrency, maskCurrency, EXPENSE_CATEGORIES, PAYMENT_TYPES } from '../utils/format'
+import { formatCurrency, parseCurrency, maskCurrency, EXPENSE_CATEGORIES, PAYMENT_TYPES } from '../utils/format'
 
 const RECURRENCES = [
   { value: 'none', label: 'Sem recorrência' },
@@ -34,20 +34,6 @@ const MONTH_OPTIONS = [
 
 const YEAR_OPTIONS = [2026, 2027, 2028, 2029, 2030]
 
-function toMonthInput(date = new Date()) {
-  const d = typeof date === 'string' ? new Date(date) : date
-  if (!d || Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 7)
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  return `${year}-${month}`
-}
-
-function getMonthLabel(monthValue) {
-  if (!monthValue) return 'Todos os meses'
-  const [year, month] = monthValue.split('-').map(Number)
-  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
-}
-
 function buildDefaultDateFilter() {
   const today = new Date()
   return {
@@ -66,6 +52,45 @@ function matchesDateFilter(dateValue, filter) {
   if (!dateValue) return false
   const [year, month] = String(dateValue).slice(0, 10).split('-').map(Number)
   return year === Number(filter.year) && month === Number(filter.month)
+}
+
+function parseDateOnly(dateValue) {
+  const [year, month, day] = String(dateValue || '').slice(0, 10).split('-').map(Number)
+  if (!year || !month || !day) return null
+  return new Date(year, month - 1, day)
+}
+
+function formatExpenseDay(dateValue) {
+  const date = parseDateOnly(dateValue)
+  if (!date) return 'Sem data'
+  const label = date.toLocaleDateString('pt-BR', {
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+function groupExpensesByDate(expenses) {
+  const grouped = expenses.reduce((acc, exp) => {
+    const key = String(exp.due_date || 'sem-data').slice(0, 10)
+    if (!acc[key]) acc[key] = []
+    acc[key].push(exp)
+    return acc
+  }, {})
+
+  return Object.entries(grouped)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, items]) => ({
+      date,
+      items: items.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+    }))
+}
+
+function recurrenceLabel(value) {
+  if (!value || value === 'none') return null
+  return RECURRENCES.find(r => r.value === value)?.label || value
 }
 
 export default function ExpensesPage() {
@@ -104,6 +129,7 @@ export default function ExpensesPage() {
     : list.filter(e => matchesDateFilter(e.due_date, dateFilter))
 
   const filtered = filter === 'all' ? dateFilteredList : dateFilteredList.filter(e => e.status === filter)
+  const groupedExpenses = groupExpensesByDate(filtered)
 
   const totalPending = dateFilteredList.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
   const totalPaid = dateFilteredList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
@@ -116,9 +142,8 @@ export default function ExpensesPage() {
       .eq('id', exp.id)
     if (error) { toast.error('Erro ao marcar como pago'); return }
 
-    // Cria próxima parcela automaticamente se for recorrente
     if (exp.recurrence && exp.recurrence !== 'none') {
-      const due = new Date(exp.due_date)
+      const due = parseDateOnly(exp.due_date) || new Date(exp.due_date)
       if (exp.recurrence === 'weekly')    due.setDate(due.getDate() + 7)
       if (exp.recurrence === 'biweekly')  due.setDate(due.getDate() + 15)
       if (exp.recurrence === 'monthly')   due.setMonth(due.getMonth() + 1)
@@ -166,7 +191,6 @@ export default function ExpensesPage() {
         }
       />
 
-      {/* Resumo */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div className="card border-l-4 border-l-warning-500">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">A Pagar</p>
@@ -182,7 +206,6 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Filtro de período */}
       <div className="card">
         <div className="flex flex-col lg:flex-row lg:items-end gap-3">
           <div className="grid grid-cols-2 gap-3 flex-1">
@@ -225,7 +248,6 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Filtros */}
       <div className="flex gap-2 flex-wrap">
         {[
           { key: 'all', label: 'Todas' },
@@ -243,7 +265,6 @@ export default function ExpensesPage() {
         ))}
       </div>
 
-      {/* Lista */}
       {filtered.length === 0 ? (
         <EmptyState
           icon={DollarSign}
@@ -251,71 +272,25 @@ export default function ExpensesPage() {
           action={<button className="btn-primary btn-sm" onClick={openNew}><Plus className="w-3.5 h-3.5" /> Nova Despesa</button>}
         />
       ) : (
-        <div className="space-y-2">
-          {filtered.map(exp => {
-            const isOverdue = exp.status === 'overdue'
-            const isPending = exp.status === 'pending'
-            const today = new Date()
-            const due = new Date(exp.due_date)
-            const daysUntil = Math.ceil((due - today) / 86400000)
-
-            return (
-              <div
-                key={exp.id}
-                className={`card flex flex-col sm:flex-row sm:items-center gap-3 ${
-                  isOverdue ? 'border-danger-200 bg-danger-50/30' : ''
-                }`}
-              >
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    isOverdue ? 'bg-danger-100 text-danger-600' :
-                    isPending ? 'bg-warning-100 text-warning-600' :
-                    'bg-success-100 text-success-600'
-                  }`}>
-                    {isOverdue ? <AlertTriangle className="w-4 h-4" /> :
-                     isPending ? <Clock className="w-4 h-4" /> :
-                     <CheckCircle className="w-4 h-4" />}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-800 truncate">{exp.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {EXPENSE_CATEGORIES[exp.category] || exp.category} · Vence: {formatDate(exp.due_date)}{exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
-                      {exp.recurrence && exp.recurrence !== 'none' && (
-                        <span className="ml-1 text-brand-600 font-medium">
-                          · {RECURRENCES.find(r => r.value === exp.recurrence)?.label}
-                        </span>
-                      )}
-                      {isPending && daysUntil >= 0 && daysUntil <= 7 && (
-                        <span className="ml-1 text-warning-600 font-medium">({daysUntil === 0 ? 'hoje!' : `em ${daysUntil} dias`})</span>
-                      )}
-                      {isOverdue && <span className="ml-1 text-danger-600 font-medium">(atrasado!)</span>}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 sm:gap-4 justify-between sm:justify-end">
-                  <div className="text-right">
-                    <p className={`font-bold ${isOverdue ? 'text-danger-700' : 'text-slate-800'}`}>
-                      {formatCurrency(exp.amount)}
-                    </p>
-                    <ExpenseBadge status={exp.status} />
-                  </div>
-                  <div className="flex gap-1.5">
-                    <button className="btn-outline btn-sm" onClick={() => openEdit(exp)}>Editar</button>
-                    {(isPending || isOverdue) && (
-                      <button className="btn-success btn-sm" onClick={() => markAsPaid(exp)}>
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        Pagar
-                      </button>
-                    )}
-                    <button className="btn-danger btn-sm" onClick={() => deleteExpense(exp)}>
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
+        <div className="card space-y-7">
+          {groupedExpenses.map(({ date, items }) => (
+            <div key={date} className="border-b border-slate-100 last:border-b-0 pb-6 last:pb-0">
+              <h3 className="font-display font-bold text-lg text-slate-900 mb-4">
+                {formatExpenseDay(date)}
+              </h3>
+              <div className="space-y-2.5">
+                {items.map(exp => (
+                  <ExpenseTimelineCard
+                    key={exp.id}
+                    exp={exp}
+                    onEdit={() => openEdit(exp)}
+                    onPaid={() => markAsPaid(exp)}
+                    onDelete={() => deleteExpense(exp)}
+                  />
+                ))}
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
       )}
 
@@ -329,6 +304,61 @@ export default function ExpensesPage() {
         onClose={() => { setShowModal(false); setEditing(null) }}
         onSuccess={() => { setShowModal(false); setEditing(null); refetch() }}
       />
+    </div>
+  )
+}
+
+function ExpenseTimelineCard({ exp, onEdit, onPaid, onDelete }) {
+  const isOverdue = exp.status === 'overdue'
+  const isPending = exp.status === 'pending'
+  const isPaid = exp.status === 'paid'
+  const recurrence = recurrenceLabel(exp.recurrence)
+  const categoryLabel = EXPENSE_CATEGORIES[exp.category] || exp.category || 'Despesa'
+
+  return (
+    <div className={`rounded-2xl border p-4 flex flex-col md:flex-row md:items-center gap-3 ${
+      isOverdue ? 'bg-danger-50/60 border-danger-100' :
+      isPaid ? 'bg-success-50/50 border-success-100' :
+      'bg-warning-50/70 border-warning-100'
+    }`}>
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+        isOverdue ? 'bg-danger-100 text-danger-600' :
+        isPaid ? 'bg-success-100 text-success-600' :
+        'bg-white text-orange-600'
+      }`}>
+        {isPaid ? <CheckCircle className="w-5 h-5" /> : isOverdue ? <AlertTriangle className="w-5 h-5" /> : <Receipt className="w-5 h-5" />}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-display font-semibold text-slate-900 truncate">{exp.name}</p>
+          <ExpenseBadge status={exp.status} />
+          <span className="text-xs font-medium text-orange-700">{categoryLabel}</span>
+        </div>
+        <p className="text-sm text-slate-500 mt-1">
+          Despesa cadastrada na seção Despesas
+          {exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
+          {recurrence ? ` · ${recurrence}` : ''}
+          {exp.notes ? ` · ${exp.notes}` : ''}
+        </p>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 md:justify-end">
+        <p className="font-display font-bold text-slate-900 text-lg md:min-w-[120px] md:text-right">
+          {formatCurrency(exp.amount)}
+        </p>
+        <div className="flex gap-1.5 justify-end">
+          <button className="btn-outline btn-sm" onClick={onEdit}>Editar</button>
+          {isPending || isOverdue ? (
+            <button className="btn-success btn-sm" onClick={onPaid}>
+              <CheckCircle className="w-3.5 h-3.5" /> Pagar
+            </button>
+          ) : null}
+          <button className="btn-danger btn-sm" onClick={onDelete} title="Excluir">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -352,8 +382,16 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
       setRecurrence(editing.recurrence || 'none')
       setPaymentMethodId(editing.payment_method_id || '')
       setNotes(editing.notes || '')
+    } else {
+      setName('')
+      setCategory('other')
+      setAmount('')
+      setDueDate('')
+      setRecurrence('none')
+      setPaymentMethodId('')
+      setNotes('')
     }
-  }, [editing])
+  }, [editing, open])
 
   async function handleSubmit(e) {
     e.preventDefault()

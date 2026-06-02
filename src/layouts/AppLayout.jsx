@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, ShoppingCart, Package, Truck, Users, Building2,
   Receipt, BarChart3, Settings, LogOut, Menu, X, Flame, ChevronDown,
-  PlusCircle, Box, ChevronRight, Car,
+  PlusCircle, Box, ChevronRight, Car, CalendarDays,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 
@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { to: '/fornecedores', icon: Building2, label: 'Fornecedores' },
   { to: '/produtos', icon: Package, label: 'Produtos' },
   { to: '/veiculos', icon: Car, label: 'Veículos' },
+  { to: '/calendario', icon: CalendarDays, label: 'Calendário' },
   { to: '/despesas', icon: Receipt, label: 'Despesas' },
   { to: '/relatorios', icon: BarChart3, label: 'Relatórios' },
   { to: '/configuracoes', icon: Settings, label: 'Configurações' },

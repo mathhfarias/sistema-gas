@@ -175,7 +175,7 @@ export const stockService = {
 
   /**
    * Baixa botijões pendentes do Vale Hub / Ultragaz após retorno no portal.
-   * Fluxo: HUB a retornar diminui.
+   * Fluxo: HUB a retornar diminui. O saldo de vazios NÃO é alterado.
    */
   async returnHub({ company_id, product_id, quantity, reason, performed_by }) {
     const qty = normalizeQuantity(quantity)
