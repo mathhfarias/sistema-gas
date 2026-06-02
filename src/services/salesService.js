@@ -347,7 +347,7 @@ export const salesService = {
         *,
         payment_methods(name, type, requires_machine),
         card_machines(name, color),
-        sale_items(*, products(name, code, sale_price, gas_povo_sale_price, cost_price, is_cylinder)),
+        sale_items(*, products(name, code, sale_price, street_sale_price, gas_povo_sale_price, cost_price, is_cylinder)),
         profiles(full_name)
       `)
       .eq('company_id', company_id)

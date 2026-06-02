@@ -38,6 +38,9 @@ function toDateTimeLocal(date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
+const DEFAULT_STREET_SALE_PRICE = 125
+
 function moneyToInput(value) {
   return Number(value || 0).toFixed(2).replace('.', ',')
 }
@@ -329,6 +332,13 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   const isValeHub = selectedPayment?.type === 'vale_hub'
   const requiresMachine = selectedPayment?.requires_machine && !isValeHub
 
+  function getProductSalePrice(product, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub) {
+    if (!product) return 0
+    if (gasPovo) return Number(product.gas_povo_sale_price || DEFAULT_GAS_POVO_SALE_PRICE)
+    if (!valeHub && saleChannel === 'street') return Number(product.street_sale_price || DEFAULT_STREET_SALE_PRICE)
+    return Number(product.sale_price || 0)
+  }
+
   useEffect(() => {
     if (!sale || !isGasPovo) return
     if (channel === 'street') {
@@ -338,6 +348,18 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       setDeliveryFee('0,00')
     }
   }, [channel, isGasPovo])
+
+  function handleChannelChange(nextChannel) {
+    setChannel(nextChannel)
+    setItems(prev => prev.map(item => {
+      const product = products.find(p => p.id === item.product_id)
+      if (!product) return item
+      return {
+        ...item,
+        unit_price: moneyToInput(getProductSalePrice(product, isGasPovo, nextChannel, isValeHub)),
+      }
+    }))
+  }
 
   function setItem(index, field, value) {
     setItems(prev => {
@@ -349,7 +371,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
         if (product) {
           updated[index].product_name = product.name
           updated[index].cost_price = Number(product.cost_price || 0)
-          updated[index].unit_price = moneyToInput(isGasPovo ? (product.gas_povo_sale_price || 100.23) : product.sale_price)
+          updated[index].unit_price = moneyToInput(getProductSalePrice(product))
         }
       }
 
@@ -397,7 +419,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       if (!product) return item
       return {
         ...item,
-        unit_price: moneyToInput(gasPovo ? (product.gas_povo_sale_price || 100.23) : product.sale_price),
+        unit_price: moneyToInput(getProductSalePrice(product, gasPovo, channel, valeHub)),
       }
     }))
 
@@ -484,7 +506,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
             )}
             <div className="form-group">
               <label className="label">Canal</label>
-              <select className="input" value={channel} onChange={e => setChannel(e.target.value)}>
+              <select className="input" value={channel} onChange={e => handleChannelChange(e.target.value)}>
                 <option value="street">Rua / entrega</option>
                 <option value="counter">Portaria / retirada</option>
                 <option value="delivery">Entrega</option>

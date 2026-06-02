@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS products (
   description TEXT,
   unit TEXT DEFAULT 'un',
   sale_price NUMERIC(10,2) NOT NULL DEFAULT 0,
+  street_sale_price NUMERIC(10,2) NOT NULL DEFAULT 125.00,
   gas_povo_sale_price NUMERIC(10,2) NOT NULL DEFAULT 100.23,
   cost_price NUMERIC(10,2) NOT NULL DEFAULT 0,
   min_stock INTEGER DEFAULT 5,
@@ -579,10 +580,10 @@ VALUES ('00000000-0000-0000-0000-000000000001', 20.00, 5)
 ON CONFLICT DO NOTHING;
 
 -- Produtos padrão
-INSERT INTO products (company_id, name, code, sale_price, gas_povo_sale_price, cost_price, is_cylinder, weight_kg, min_stock)
+INSERT INTO products (company_id, name, code, sale_price, street_sale_price, gas_povo_sale_price, cost_price, is_cylinder, weight_kg, min_stock)
 VALUES
-  ('00000000-0000-0000-0000-000000000001', 'Botijão P13', 'P13', 110.00, 100.23, 75.00, true, 13, 10),
-  ('00000000-0000-0000-0000-000000000001', 'Botijão P45', 'P45', 280.00, 100.23, 210.00, true, 45, 3)
+  ('00000000-0000-0000-0000-000000000001', 'Botijão P13', 'P13', 110.00, 125.00, 100.23, 75.00, true, 13, 10),
+  ('00000000-0000-0000-0000-000000000001', 'Botijão P45', 'P45', 280.00, 125.00, 100.23, 210.00, true, 45, 3)
 ON CONFLICT DO NOTHING;
 
 -- Estoque inicial atual da empresa
