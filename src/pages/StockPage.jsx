@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Edit3, History, AlertTriangle, ArrowLeftRight, CheckCircle } from 'lucide-react'
+import { Edit3, History, AlertTriangle, ArrowLeftRight, CheckCircle, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuth } from '../hooks/useAuth'
 import { useSupabaseQuery } from '../hooks/useSupabaseQuery'
@@ -17,6 +17,7 @@ const MOVEMENT_TYPE_LABEL = {
   loss: 'Perda',
   exchange_out: 'Enviado p/ Troca',
   exchange_in: 'Recebido da Troca',
+  hub_return: 'Retorno HUB',
 }
 
 export default function StockPage() {
@@ -25,6 +26,7 @@ export default function StockPage() {
 
   const [adjustModal, setAdjustModal] = useState(null)
   const [exchangeModal, setExchangeModal] = useState(null)
+  const [hubModal, setHubModal] = useState(null)
   const [historyProduct, setHistoryProduct] = useState(null)
 
   const { data: balances, loading, refetch } = useSupabaseQuery(
@@ -46,6 +48,7 @@ export default function StockPage() {
   function handleSuccess(message) {
     setAdjustModal(null)
     setExchangeModal(null)
+    setHubModal(null)
     refetch()
     refetchMovements()
     toast.success(message)
@@ -55,7 +58,7 @@ export default function StockPage() {
     <div className="space-y-6">
       <PageHeader
         title="Estoque"
-        subtitle="Saldo atual de botijões cheios, vazios e em troca"
+        subtitle="Saldo atual de botijões cheios, vazios, em troca e HUB a retornar"
         actions={
           <button className="btn-outline" onClick={() => setHistoryProduct(null)}>
             <History className="w-4 h-4" />
@@ -79,6 +82,7 @@ export default function StockPage() {
           const fullQty = Number(item.full_qty || 0)
           const emptyQty = Number(item.empty_qty || 0)
           const exchangeQty = Number(item.exchange_qty || 0)
+          const hubPendingQty = Number(item.hub_pending_qty || 0)
           const minStock = Number(item.products?.min_stock || 5)
           const isLow = fullQty <= minStock
 
@@ -97,7 +101,7 @@ export default function StockPage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-2 mb-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
                 <div className="bg-brand-50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-display font-bold text-brand-700">{fullQty}</p>
                   <p className="text-xs text-brand-600 font-medium mt-0.5">Cheios</p>
@@ -109,6 +113,10 @@ export default function StockPage() {
                 <div className="bg-orange-50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-display font-bold text-orange-600">{exchangeQty}</p>
                   <p className="text-xs text-orange-600 font-medium mt-0.5">Em troca</p>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-display font-bold text-purple-700">{hubPendingQty}</p>
+                  <p className="text-xs text-purple-600 font-medium mt-0.5">HUB</p>
                 </div>
               </div>
 
@@ -133,6 +141,15 @@ export default function StockPage() {
                 >
                   <CheckCircle className="w-3.5 h-3.5" />
                   Receber
+                </button>
+                <button
+                  className="btn-outline btn-sm"
+                  onClick={() => setHubModal(item)}
+                  disabled={hubPendingQty <= 0}
+                  title={hubPendingQty <= 0 ? 'Nenhum botijão HUB pendente' : 'Baixar retorno feito no portal HUB'}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Baixar HUB
                 </button>
                 <button
                   className="btn-secondary btn-sm"
@@ -173,6 +190,7 @@ export default function StockPage() {
                   <th className="text-center">Cheio</th>
                   <th className="text-center">Vazio</th>
                   <th className="text-center">Troca</th>
+                  <th className="text-center">HUB</th>
                   <th>Motivo / Usuário</th>
                 </tr>
               </thead>
@@ -186,6 +204,7 @@ export default function StockPage() {
                         m.type === 'sale' ? 'badge-blue' :
                         m.type === 'purchase' ? 'badge-green' :
                         m.type === 'exchange_out' || m.type === 'exchange_in' ? 'badge-yellow' :
+                        m.type === 'hub_return' ? 'badge-purple' :
                         'badge-gray'
                       }`}>
                         {MOVEMENT_TYPE_LABEL[m.type] || m.type}
@@ -194,6 +213,7 @@ export default function StockPage() {
                     <StockChange value={m.full_qty_change} />
                     <StockChange value={m.empty_qty_change} />
                     <StockChange value={m.exchange_qty_change} />
+                    <StockChange value={m.hub_pending_qty_change} />
                     <td className="text-xs text-slate-500">{m.reason || m.profiles?.full_name || '—'}</td>
                   </tr>
                 ))}
@@ -221,6 +241,15 @@ export default function StockPage() {
         onClose={() => setExchangeModal(null)}
         onSuccess={(message) => handleSuccess(message)}
       />
+
+      <HubReturnModal
+        open={!!hubModal}
+        item={hubModal}
+        companyId={companyId}
+        userId={profile?.id}
+        onClose={() => setHubModal(null)}
+        onSuccess={() => handleSuccess('Retorno HUB baixado!')}
+      />
     </div>
   )
 }
@@ -238,6 +267,7 @@ function AdjustModal({ open, item, companyId, userId, onClose, onSuccess }) {
   const [fullChange, setFullChange] = useState(0)
   const [emptyChange, setEmptyChange] = useState(0)
   const [exchangeChange, setExchangeChange] = useState(0)
+  const [hubChange, setHubChange] = useState(0)
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -252,6 +282,7 @@ function AdjustModal({ open, item, companyId, userId, onClose, onSuccess }) {
       full_qty_change: Number(fullChange),
       empty_qty_change: Number(emptyChange),
       exchange_qty_change: Number(exchangeChange),
+      hub_pending_qty_change: Number(hubChange),
       reason,
       performed_by: userId,
     })
@@ -261,6 +292,7 @@ function AdjustModal({ open, item, companyId, userId, onClose, onSuccess }) {
     setFullChange(0)
     setEmptyChange(0)
     setExchangeChange(0)
+    setHubChange(0)
     setReason('')
     onSuccess()
   }
@@ -268,7 +300,7 @@ function AdjustModal({ open, item, companyId, userId, onClose, onSuccess }) {
   return (
     <Modal open={open} onClose={onClose} title={`Ajuste de Estoque — ${item?.products?.name || ''}`}>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="form-group">
             <label className="label">Cheios</label>
             <input type="number" className="input text-center" value={fullChange} onChange={e => setFullChange(e.target.value)} />
@@ -280,6 +312,10 @@ function AdjustModal({ open, item, companyId, userId, onClose, onSuccess }) {
           <div className="form-group">
             <label className="label">Em troca</label>
             <input type="number" className="input text-center" value={exchangeChange} onChange={e => setExchangeChange(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="label">HUB</label>
+            <input type="number" className="input text-center" value={hubChange} onChange={e => setHubChange(e.target.value)} />
           </div>
         </div>
 
@@ -390,6 +426,80 @@ function ExchangeModal({ open, action, item, companyId, userId, onClose, onSucce
           <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
           <button type="submit" className="btn-primary" disabled={submitting}>
             {submitting ? 'Salvando...' : isSend ? 'Enviar para troca' : 'Receber da troca'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function HubReturnModal({ open, item, companyId, userId, onClose, onSuccess }) {
+  const [quantity, setQuantity] = useState(1)
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const hubPendingQty = Number(item?.hub_pending_qty || 0)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    const qty = Number(quantity)
+    if (!qty || qty <= 0) { toast.error('Informe uma quantidade maior que zero'); return }
+    if (qty > hubPendingQty) { toast.error(`Saldo HUB insuficiente. Disponível: ${hubPendingQty}`); return }
+
+    setSubmitting(true)
+    const { error } = await stockService.returnHub({
+      company_id: companyId,
+      product_id: item?.product_id,
+      quantity: qty,
+      reason,
+      performed_by: userId,
+    })
+    setSubmitting(false)
+
+    if (error) { toast.error(error.message); return }
+    setQuantity(1)
+    setReason('')
+    onSuccess()
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Baixar HUB — ${item?.products?.name || ''}`}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="rounded-xl bg-purple-50 border border-purple-100 p-3 text-sm text-purple-700">
+          <p>
+            Esta ação baixa o saldo de <strong>HUB a retornar</strong> depois que o vazio foi retornado para a Ultragaz pelo portal HUB.
+          </p>
+          <p className="mt-1 text-xs">Saldo atual: <strong>{hubPendingQty}</strong></p>
+        </div>
+
+        <div className="form-group">
+          <label className="label">Quantidade *</label>
+          <input
+            type="number"
+            min="1"
+            max={hubPendingQty || undefined}
+            className="input"
+            value={quantity}
+            onChange={e => setQuantity(e.target.value)}
+            required
+          />
+        </div>
+
+        <div className="form-group">
+          <label className="label">Observação</label>
+          <textarea
+            className="input resize-none"
+            rows={3}
+            placeholder="Ex: Retorno realizado no portal HUB / Ultragaz"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+          />
+        </div>
+
+        <div className="flex gap-2 justify-end">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
+          <button type="submit" className="btn-primary" disabled={submitting || hubPendingQty <= 0}>
+            {submitting ? 'Salvando...' : 'Baixar HUB'}
           </button>
         </div>
       </form>

@@ -106,6 +106,7 @@ export const stockService = {
     full_qty_change,
     empty_qty_change,
     exchange_qty_change,
+    hub_pending_qty_change,
     reason,
     performed_by,
   }) {
@@ -120,6 +121,7 @@ export const stockService = {
       full_qty_change: normalizeQuantity(full_qty_change),
       empty_qty_change: normalizeQuantity(empty_qty_change),
       exchange_qty_change: normalizeQuantity(exchange_qty_change),
+      hub_pending_qty_change: normalizeQuantity(hub_pending_qty_change),
       reason,
       performed_by,
     })
@@ -141,6 +143,7 @@ export const stockService = {
       full_qty_change: 0,
       empty_qty_change: -qty,
       exchange_qty_change: qty,
+      hub_pending_qty_change: 0,
       reason: reason?.trim() || 'Envio de vazios para troca',
       performed_by,
     })
@@ -162,7 +165,32 @@ export const stockService = {
       full_qty_change: qty,
       empty_qty_change: 0,
       exchange_qty_change: -qty,
+      hub_pending_qty_change: 0,
       reason: reason?.trim() || 'Recebimento de cheios da troca',
+      performed_by,
+    })
+  },
+
+
+
+  /**
+   * Baixa botijões pendentes do Vale Hub / Ultragaz após retorno no portal.
+   * Fluxo: HUB a retornar diminui.
+   */
+  async returnHub({ company_id, product_id, quantity, reason, performed_by }) {
+    const qty = normalizeQuantity(quantity)
+    const invalid = validatePositiveQuantity(qty)
+    if (invalid) return invalid
+
+    return supabase.from('stock_movements').insert({
+      company_id,
+      product_id,
+      type: 'hub_return',
+      full_qty_change: 0,
+      empty_qty_change: 0,
+      exchange_qty_change: 0,
+      hub_pending_qty_change: -qty,
+      reason: reason?.trim() || 'Retorno realizado no portal HUB / Ultragaz',
       performed_by,
     })
   },

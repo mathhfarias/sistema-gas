@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   product_id UUID REFERENCES products(id),
   type TEXT NOT NULL CHECK (type IN (
     'sale','purchase','return_empty','return_full',
-    'adjustment','purchase_return','loss','exchange_out','exchange_in'
+    'adjustment','purchase_return','loss','exchange_out','exchange_in','hub_return'
   )),
   full_qty_change INTEGER DEFAULT 0,
   empty_qty_change INTEGER DEFAULT 0,

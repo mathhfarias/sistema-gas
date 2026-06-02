@@ -195,6 +195,7 @@ export default function DashboardPage() {
           subtitle="vazios para Ultragaz"
           icon={Package}
           color={(data.hubPendingQty || 0) > 0 ? 'purple' : 'gray'}
+          onClick={() => navigate('/estoque')}
         />
       </div>
 
