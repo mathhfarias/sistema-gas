@@ -467,7 +467,7 @@ function HubReturnModal({ open, item, companyId, userId, onClose, onSuccess }) {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="rounded-xl bg-purple-50 border border-purple-100 p-3 text-sm text-purple-700">
           <p>
-            Esta ação baixa o saldo de <strong>HUB a retornar</strong> depois que o vazio foi retornado para a Ultragaz pelo portal HUB.
+            Esta ação baixa apenas o card <strong>HUB a retornar</strong> depois que o retorno foi confirmado no portal HUB. O estoque de vazios será mantido.
           </p>
           <p className="mt-1 text-xs">Saldo atual: <strong>{hubPendingQty}</strong></p>
         </div>
