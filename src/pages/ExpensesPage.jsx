@@ -17,6 +17,23 @@ const RECURRENCES = [
 
 const CATEGORY_OPTS = Object.entries(EXPENSE_CATEGORIES).map(([value, label]) => ({ value, label }))
 
+const MONTH_OPTIONS = [
+  { value: 1, label: 'Jan' },
+  { value: 2, label: 'Fev' },
+  { value: 3, label: 'Mar' },
+  { value: 4, label: 'Abr' },
+  { value: 5, label: 'Mai' },
+  { value: 6, label: 'Jun' },
+  { value: 7, label: 'Jul' },
+  { value: 8, label: 'Ago' },
+  { value: 9, label: 'Set' },
+  { value: 10, label: 'Out' },
+  { value: 11, label: 'Nov' },
+  { value: 12, label: 'Dez' },
+]
+
+const YEAR_OPTIONS = [2026, 2027, 2028, 2029, 2030]
+
 function toMonthInput(date = new Date()) {
   const d = typeof date === 'string' ? new Date(date) : date
   if (!d || Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 7)
@@ -31,13 +48,38 @@ function getMonthLabel(monthValue) {
   return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 }
 
+function buildDefaultDateFilter() {
+  const today = new Date()
+  return {
+    day: 'all',
+    month: today.getMonth() + 1,
+    year: YEAR_OPTIONS.includes(today.getFullYear()) ? today.getFullYear() : YEAR_OPTIONS[0],
+  }
+}
+
+function getDateFilterLabel(filter, showAll) {
+  if (showAll) return 'todos os períodos'
+  const monthLabel = MONTH_OPTIONS.find(m => m.value === Number(filter.month))?.label || 'Mês'
+  const dayLabel = filter.day === 'all' ? '' : `${String(filter.day).padStart(2, '0')} de `
+  return `${dayLabel}${monthLabel}/${filter.year}`
+}
+
+function matchesDateFilter(dateValue, filter) {
+  if (!dateValue) return false
+  const [year, month, day] = String(dateValue).slice(0, 10).split('-').map(Number)
+  if (year !== Number(filter.year)) return false
+  if (month !== Number(filter.month)) return false
+  if (filter.day !== 'all' && day !== Number(filter.day)) return false
+  return true
+}
+
 export default function ExpensesPage() {
   const { profile } = useAuth()
   const companyId = profile?.company_id
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [filter, setFilter] = useState('all')
-  const [selectedMonth, setSelectedMonth] = useState(toMonthInput(new Date()))
+  const [dateFilter, setDateFilter] = useState(buildDefaultDateFilter())
   const [showAllMonths, setShowAllMonths] = useState(false)
 
   const { data: expenses, loading, refetch } = useSupabaseQuery(
@@ -62,15 +104,15 @@ export default function ExpensesPage() {
   if (loading) return <PageLoader />
 
   const list = expenses || []
-  const monthList = showAllMonths
+  const dateFilteredList = showAllMonths
     ? list
-    : list.filter(e => (e.due_date || '').slice(0, 7) === selectedMonth)
+    : list.filter(e => matchesDateFilter(e.due_date, dateFilter))
 
-  const filtered = filter === 'all' ? monthList : monthList.filter(e => e.status === filter)
+  const filtered = filter === 'all' ? dateFilteredList : dateFilteredList.filter(e => e.status === filter)
 
-  const totalPending = monthList.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
-  const totalPaid = monthList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
-  const overdue = monthList.filter(e => e.status === 'overdue')
+  const totalPending = dateFilteredList.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
+  const totalPaid = dateFilteredList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
+  const overdue = dateFilteredList.filter(e => e.status === 'overdue')
 
   async function markAsPaid(exp) {
     const { error } = await supabase
@@ -121,7 +163,7 @@ export default function ExpensesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Despesas"
-        subtitle={`Controle de contas a pagar — ${showAllMonths ? 'todos os meses' : getMonthLabel(selectedMonth)}`}
+        subtitle={`Controle de contas a pagar — ${getDateFilterLabel(dateFilter, showAllMonths)}`}
         actions={
           <button className="btn-primary" onClick={openNew}>
             <Plus className="w-4 h-4" /> Nova Despesa
@@ -145,26 +187,56 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Filtro de mês */}
+      {/* Filtro de período */}
       <div className="card">
-        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-          <div className="form-group sm:w-60">
-            <label className="label">Mês de visualização</label>
-            <input
-              type="month"
-              className="input"
-              value={selectedMonth}
-              onChange={e => { setSelectedMonth(e.target.value); setShowAllMonths(false) }}
-            />
+        <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+          <div className="grid grid-cols-3 gap-3 flex-1">
+            <div className="form-group">
+              <label className="label">Dia</label>
+              <select
+                className="input"
+                value={dateFilter.day}
+                onChange={e => { setDateFilter(prev => ({ ...prev, day: e.target.value })); setShowAllMonths(false) }}
+              >
+                <option value="all">Todos</option>
+                {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                  <option key={day} value={day}>{String(day).padStart(2, '0')}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="label">Mês</label>
+              <select
+                className="input"
+                value={dateFilter.month}
+                onChange={e => { setDateFilter(prev => ({ ...prev, month: Number(e.target.value) })); setShowAllMonths(false) }}
+              >
+                {MONTH_OPTIONS.map(month => (
+                  <option key={month.value} value={month.value}>{month.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="label">Ano</label>
+              <select
+                className="input"
+                value={dateFilter.year}
+                onChange={e => { setDateFilter(prev => ({ ...prev, year: Number(e.target.value) })); setShowAllMonths(false) }}
+              >
+                {YEAR_OPTIONS.map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="flex gap-2 flex-wrap">
             <button className={!showAllMonths ? 'btn-primary btn-sm' : 'btn-outline btn-sm'} onClick={() => setShowAllMonths(false)}>
-              Ver mês selecionado
+              Ver período
             </button>
             <button className={showAllMonths ? 'btn-primary btn-sm' : 'btn-outline btn-sm'} onClick={() => setShowAllMonths(true)}>
               Ver todos
             </button>
-            <button className="btn-outline btn-sm" onClick={() => { setSelectedMonth(toMonthInput(new Date())); setShowAllMonths(false) }}>
+            <button className="btn-outline btn-sm" onClick={() => { setDateFilter(buildDefaultDateFilter()); setShowAllMonths(false) }}>
               Mês atual
             </button>
           </div>
@@ -193,7 +265,7 @@ export default function ExpensesPage() {
       {filtered.length === 0 ? (
         <EmptyState
           icon={DollarSign}
-          title={showAllMonths ? 'Nenhuma despesa encontrada' : `Nenhuma despesa em ${getMonthLabel(selectedMonth)}`}
+          title={showAllMonths ? 'Nenhuma despesa encontrada' : `Nenhuma despesa em ${getDateFilterLabel(dateFilter, false)}`}
           action={<button className="btn-primary btn-sm" onClick={openNew}><Plus className="w-3.5 h-3.5" /> Nova Despesa</button>}
         />
       ) : (
