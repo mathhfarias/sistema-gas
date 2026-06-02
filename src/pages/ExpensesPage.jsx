@@ -51,7 +51,6 @@ function getMonthLabel(monthValue) {
 function buildDefaultDateFilter() {
   const today = new Date()
   return {
-    day: 'all',
     month: today.getMonth() + 1,
     year: YEAR_OPTIONS.includes(today.getFullYear()) ? today.getFullYear() : YEAR_OPTIONS[0],
   }
@@ -60,17 +59,13 @@ function buildDefaultDateFilter() {
 function getDateFilterLabel(filter, showAll) {
   if (showAll) return 'todos os períodos'
   const monthLabel = MONTH_OPTIONS.find(m => m.value === Number(filter.month))?.label || 'Mês'
-  const dayLabel = filter.day === 'all' ? '' : `${String(filter.day).padStart(2, '0')} de `
-  return `${dayLabel}${monthLabel}/${filter.year}`
+  return `${monthLabel}/${filter.year}`
 }
 
 function matchesDateFilter(dateValue, filter) {
   if (!dateValue) return false
-  const [year, month, day] = String(dateValue).slice(0, 10).split('-').map(Number)
-  if (year !== Number(filter.year)) return false
-  if (month !== Number(filter.month)) return false
-  if (filter.day !== 'all' && day !== Number(filter.day)) return false
-  return true
+  const [year, month] = String(dateValue).slice(0, 10).split('-').map(Number)
+  return year === Number(filter.year) && month === Number(filter.month)
 }
 
 export default function ExpensesPage() {
@@ -190,20 +185,7 @@ export default function ExpensesPage() {
       {/* Filtro de período */}
       <div className="card">
         <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-          <div className="grid grid-cols-3 gap-3 flex-1">
-            <div className="form-group">
-              <label className="label">Dia</label>
-              <select
-                className="input"
-                value={dateFilter.day}
-                onChange={e => { setDateFilter(prev => ({ ...prev, day: e.target.value })); setShowAllMonths(false) }}
-              >
-                <option value="all">Todos</option>
-                {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
-                  <option key={day} value={day}>{String(day).padStart(2, '0')}</option>
-                ))}
-              </select>
-            </div>
+          <div className="grid grid-cols-2 gap-3 flex-1">
             <div className="form-group">
               <label className="label">Mês</label>
               <select
