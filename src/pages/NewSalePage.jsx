@@ -10,12 +10,14 @@ import { PageHeader, Modal } from '../components/ui'
 
 const DEFAULT_ITEM = {
   product_id: '', product_name: '', quantity: 1,
-  unit_price: '', cost_price: 0,
+  unit_price: '', cost_price: 0, sale_kind: 'exchange',
   empty_returned: true, empty_qty_returned: 1,
 }
 
 const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
 const DEFAULT_STREET_SALE_PRICE = 125
+const DEFAULT_EMPTY_CYLINDER_SALE_PRICE = 200
+const DEFAULT_FULL_NO_RETURN_SALE_PRICE = 300
 
 function moneyToInput(value) {
   return Number(value || 0).toFixed(2).replace('.', ',')
@@ -24,6 +26,12 @@ function moneyToInput(value) {
 const SALE_CHANNELS = [
   { value: 'street', label: 'Rua', icon: Truck, color: 'bg-orange-500', light: 'bg-orange-50 border-orange-300 text-orange-700' },
   { value: 'counter', label: 'Portaria', icon: Store, color: 'bg-brand-600', light: 'bg-brand-50 border-brand-300 text-brand-700' },
+]
+
+const SALE_KIND_OPTIONS = [
+  { value: 'exchange', label: 'Gás com troca', hint: 'Sai cheio e entra vazio retornado.' },
+  { value: 'empty_cylinder', label: 'Vazio / casco', hint: 'Venda de botijão vazio por R$ 200,00. Baixa dos vazios.' },
+  { value: 'full_no_return', label: 'Cheio sem retorno', hint: 'Venda do botijão cheio sem casco retornado por R$ 300,00.' },
 ]
 
 function useClock() {
@@ -87,9 +95,11 @@ export default function NewSalePage() {
   const discountVal = parseCurrency(discount)
   const total = subtotal + deliveryFee - discountVal
 
-  function getProductSalePrice(prod, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub) {
+  function getProductSalePrice(prod, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub, saleKind = 'exchange') {
     if (!prod) return 0
-    if (gasPovo) return Number(prod.gas_povo_sale_price || DEFAULT_GAS_POVO_SALE_PRICE)
+    if (saleKind === 'empty_cylinder') return Number(prod.empty_cylinder_sale_price ?? DEFAULT_EMPTY_CYLINDER_SALE_PRICE)
+    if (saleKind === 'full_no_return') return Number(prod.full_no_return_sale_price ?? DEFAULT_FULL_NO_RETURN_SALE_PRICE)
+    if (gasPovo) return Number(prod.gas_povo_sale_price ?? DEFAULT_GAS_POVO_SALE_PRICE)
     if (!valeHub && saleChannel === 'street') return Number(prod.street_sale_price || DEFAULT_STREET_SALE_PRICE)
     return Number(prod.sale_price || 0)
   }
@@ -105,7 +115,8 @@ export default function NewSalePage() {
         const prod = products.find(p => p.id === item.product_id)
         return {
           ...item,
-          unit_price: prod ? moneyToInput(getProductSalePrice(prod, false, channel, true)) : item.unit_price,
+          sale_kind: 'exchange',
+          unit_price: prod ? moneyToInput(getProductSalePrice(prod, false, channel, true, 'exchange')) : item.unit_price,
           empty_returned: true,
           empty_qty_returned: Number(item.quantity || 1),
         }
@@ -118,7 +129,8 @@ export default function NewSalePage() {
         if (!prod) return item
         return {
           ...item,
-          unit_price: moneyToInput(getProductSalePrice(prod, true, channel, false)),
+          sale_kind: 'exchange',
+          unit_price: moneyToInput(getProductSalePrice(prod, true, channel, false, 'exchange')),
         }
       }))
     }
@@ -131,7 +143,7 @@ export default function NewSalePage() {
       if (!prod) return item
       return {
         ...item,
-        unit_price: moneyToInput(getProductSalePrice(prod, isGasPovo, nextChannel, isValeHub)),
+        unit_price: moneyToInput(getProductSalePrice(prod, isGasPovo, nextChannel, isValeHub, item.sale_kind)),
       }
     }))
   }
@@ -144,14 +156,28 @@ export default function NewSalePage() {
         const prod = products.find(p => p.id === value)
         if (prod) {
           updated[index].product_name = prod.name
-          updated[index].unit_price = moneyToInput(getProductSalePrice(prod))
+          updated[index].unit_price = moneyToInput(getProductSalePrice(prod, isGasPovo, channel, isValeHub, updated[index].sale_kind || 'exchange'))
           updated[index].cost_price = prod.cost_price
           if (!prod.is_cylinder) {
+            updated[index].sale_kind = 'exchange'
             updated[index].empty_returned = false
             updated[index].empty_qty_returned = 0
           }
         }
       }
+      if (field === 'sale_kind') {
+        const prod = products.find(p => p.id === updated[index].product_id)
+        updated[index].sale_kind = value
+        updated[index].unit_price = prod ? moneyToInput(getProductSalePrice(prod, isGasPovo, channel, isValeHub, value)) : updated[index].unit_price
+        if (value !== 'exchange') {
+          updated[index].empty_returned = false
+          updated[index].empty_qty_returned = 0
+        } else {
+          updated[index].empty_returned = true
+          updated[index].empty_qty_returned = Number(updated[index].quantity || 1)
+        }
+      }
+
       if (field === 'quantity' && updated[index].empty_returned) {
         updated[index].empty_qty_returned = Number(value) || 1
       }
@@ -161,6 +187,10 @@ export default function NewSalePage() {
       }
       if (field === 'empty_returned') {
         updated[index].empty_qty_returned = value ? (updated[index].quantity || 1) : 0
+      }
+      if (updated[index].sale_kind !== 'exchange') {
+        updated[index].empty_returned = false
+        updated[index].empty_qty_returned = 0
       }
       return updated
     })
@@ -180,6 +210,14 @@ export default function NewSalePage() {
     if (!paymentMethodId) { toast.error('Selecione a forma de pagamento'); return }
     if (items.some(i => !i.product_id)) { toast.error('Selecione o produto em todos os itens'); return }
     if (requiresMachine && !cardMachineId) { toast.error('Selecione a maquininha'); return }
+    if (isValeHub && items.some(i => i.sale_kind !== 'exchange')) { toast.error('Vale Hub / Ultragaz só deve ser usado em venda com troca.'); return }
+    if (isGasPovo) {
+      const invalidGasPovo = items.find(i => {
+        const prod = products.find(p => p.id === i.product_id)
+        return i.sale_kind !== 'exchange' || Number(prod?.gas_povo_sale_price ?? 0) <= 0
+      })
+      if (invalidGasPovo) { toast.error('Gás do Povo só está disponível para produtos habilitados, como P13.'); return }
+    }
 
     setSubmitting(true)
     const { error } = await salesService.createSale({
@@ -352,6 +390,25 @@ export default function NewSalePage() {
                     </div>
                   </div>
 
+                  {isCylinder && (
+                    <div className="form-group">
+                      <label className="label">Tipo da venda</label>
+                      <select
+                        className="input"
+                        value={item.sale_kind || 'exchange'}
+                        onChange={e => setItem(idx, 'sale_kind', e.target.value)}
+                        disabled={isValeHub || isGasPovo}
+                      >
+                        {SALE_KIND_OPTIONS.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {SALE_KIND_OPTIONS.find(option => option.value === (item.sale_kind || 'exchange'))?.hint}
+                      </p>
+                    </div>
+                  )}
+
                   <div className="form-group">
                     <label className="label">Valor unitário *</label>
                     <div className="relative">
@@ -363,7 +420,7 @@ export default function NewSalePage() {
                     </div>
                   </div>
 
-                  {isCylinder && (
+                  {isCylinder && (item.sale_kind || 'exchange') === 'exchange' && (
                     <div className="flex items-center gap-3 pt-1">
                       <input type="checkbox" id={`empty-${idx}`} className="w-4 h-4 rounded accent-brand-600"
                         checked={item.empty_returned} disabled={isValeHub} onChange={e => setItem(idx, 'empty_returned', e.target.checked)} />
@@ -375,6 +432,17 @@ export default function NewSalePage() {
                           disabled={isValeHub}
                           onChange={e => setItem(idx, 'empty_qty_returned', e.target.value)} />
                       )}
+                    </div>
+                  )}
+
+                  {isCylinder && item.sale_kind === 'empty_cylinder' && (
+                    <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                      Venda de vazio/casco: baixa a quantidade de vazios do estoque.
+                    </div>
+                  )}
+                  {isCylinder && item.sale_kind === 'full_no_return' && (
+                    <div className="p-2 rounded-lg bg-orange-50 border border-orange-200 text-xs text-orange-700">
+                      Cheio sem retorno: baixa cheios e não adiciona vazio ao estoque.
                     </div>
                   )}
 
@@ -411,7 +479,7 @@ export default function NewSalePage() {
 
           {isGasPovo && (
             <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700">
-              <strong>Gás do Povo:</strong> preço unitário ajustado para o valor cadastrado no produto. A taxa de entrega só entra quando o canal for <strong>Rua</strong>.
+              <strong>Gás do Povo:</strong> preço unitário ajustado para o valor cadastrado no produto. Produtos com preço Gás do Povo igual a R$ 0,00, como P45, serão bloqueados.
             </div>
           )}
 
