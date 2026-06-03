@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS products (
   sale_price NUMERIC(10,2) NOT NULL DEFAULT 0,
   street_sale_price NUMERIC(10,2) NOT NULL DEFAULT 125.00,
   gas_povo_sale_price NUMERIC(10,2) NOT NULL DEFAULT 100.23,
+  empty_cylinder_sale_price NUMERIC(10,2) NOT NULL DEFAULT 200.00,
+  full_no_return_sale_price NUMERIC(10,2) NOT NULL DEFAULT 300.00,
   cost_price NUMERIC(10,2) NOT NULL DEFAULT 0,
   min_stock INTEGER DEFAULT 5,
   is_active BOOLEAN DEFAULT TRUE,
@@ -231,6 +233,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
   cost_price NUMERIC(10,2) DEFAULT 0,
   discount NUMERIC(10,2) DEFAULT 0,
   total NUMERIC(10,2) NOT NULL,
+  sale_kind TEXT NOT NULL DEFAULT 'exchange' CHECK (sale_kind IN ('exchange','empty_cylinder','full_no_return')),
   empty_returned BOOLEAN DEFAULT FALSE,
   empty_qty_returned INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -600,10 +603,10 @@ VALUES ('00000000-0000-0000-0000-000000000001', 20.00, 5)
 ON CONFLICT DO NOTHING;
 
 -- Produtos padrão
-INSERT INTO products (company_id, name, code, sale_price, street_sale_price, gas_povo_sale_price, cost_price, is_cylinder, weight_kg, min_stock)
+INSERT INTO products (company_id, name, code, sale_price, street_sale_price, gas_povo_sale_price, empty_cylinder_sale_price, full_no_return_sale_price, cost_price, is_cylinder, weight_kg, min_stock)
 VALUES
-  ('00000000-0000-0000-0000-000000000001', 'Botijão P13', 'P13', 110.00, 125.00, 100.23, 75.00, true, 13, 10),
-  ('00000000-0000-0000-0000-000000000001', 'Botijão P45', 'P45', 280.00, 125.00, 100.23, 210.00, true, 45, 3)
+  ('00000000-0000-0000-0000-000000000001', 'Botijão P13', 'P13', 110.00, 125.00, 100.23, 200.00, 300.00, 75.00, true, 13, 10),
+  ('00000000-0000-0000-0000-000000000001', 'Botijão P45', 'P45', 280.00, 125.00, 0.00, 200.00, 300.00, 210.00, true, 45, 3)
 ON CONFLICT DO NOTHING;
 
 -- Estoque inicial atual da empresa

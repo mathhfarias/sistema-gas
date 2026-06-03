@@ -8,6 +8,8 @@ import { PageHeader, PageLoader, EmptyState, Modal } from '../components/ui'
 import { formatCurrency, parseCurrency, maskCurrency } from '../utils/format'
 
 const DEFAULT_STREET_SALE_PRICE = 125
+const DEFAULT_EMPTY_CYLINDER_SALE_PRICE = 200
+const DEFAULT_FULL_NO_RETURN_SALE_PRICE = 300
 
 export default function ProductsPage() {
   const { profile } = useAuth()
@@ -55,6 +57,8 @@ export default function ProductsPage() {
                 <th className="text-right">Preço Venda</th>
                 <th className="text-right">Entrega / Rua</th>
                 <th className="text-right">Gás do Povo</th>
+                <th className="text-right">Vazio / Casco</th>
+                <th className="text-right">Cheio s/ retorno</th>
                 <th className="text-right">Custo</th>
                 <th className="text-right">Margem</th>
                 <th>Estoque mín.</th>
@@ -71,7 +75,9 @@ export default function ProductsPage() {
                     <td className="font-medium">{p.name}</td>
                     <td className="text-right currency">{formatCurrency(p.sale_price)}</td>
                     <td className="text-right currency">{formatCurrency(p.street_sale_price || DEFAULT_STREET_SALE_PRICE)}</td>
-                    <td className="text-right currency">{formatCurrency(p.gas_povo_sale_price || 100.23)}</td>
+                    <td className="text-right currency">{formatCurrency(p.gas_povo_sale_price ?? 100.23)}</td>
+                    <td className="text-right currency">{formatCurrency(p.empty_cylinder_sale_price ?? DEFAULT_EMPTY_CYLINDER_SALE_PRICE)}</td>
+                    <td className="text-right currency">{formatCurrency(p.full_no_return_sale_price ?? DEFAULT_FULL_NO_RETURN_SALE_PRICE)}</td>
                     <td className="text-right currency">{formatCurrency(p.cost_price)}</td>
                     <td className="text-right">
                       <span className={`font-semibold ${margin >= 20 ? 'text-success-600' : margin >= 10 ? 'text-warning-600' : 'text-danger-600'}`}>
@@ -114,7 +120,9 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
   const [code, setCode] = useState(editing?.code || '')
   const [salePrice, setSalePrice] = useState(editing ? editing.sale_price.toFixed(2).replace('.', ',') : '')
   const [streetSalePrice, setStreetSalePrice] = useState(editing ? Number(editing.street_sale_price || DEFAULT_STREET_SALE_PRICE).toFixed(2).replace('.', ',') : '125,00')
-  const [gasPovoSalePrice, setGasPovoSalePrice] = useState(editing ? Number(editing.gas_povo_sale_price || 100.23).toFixed(2).replace('.', ',') : '100,23')
+  const [gasPovoSalePrice, setGasPovoSalePrice] = useState(editing ? Number(editing.gas_povo_sale_price ?? 100.23).toFixed(2).replace('.', ',') : '100,23')
+  const [emptyCylinderSalePrice, setEmptyCylinderSalePrice] = useState(editing ? Number(editing.empty_cylinder_sale_price ?? DEFAULT_EMPTY_CYLINDER_SALE_PRICE).toFixed(2).replace('.', ',') : '200,00')
+  const [fullNoReturnSalePrice, setFullNoReturnSalePrice] = useState(editing ? Number(editing.full_no_return_sale_price ?? DEFAULT_FULL_NO_RETURN_SALE_PRICE).toFixed(2).replace('.', ',') : '300,00')
   const [costPrice, setCostPrice] = useState(editing ? editing.cost_price.toFixed(2).replace('.', ',') : '')
   const [minStock, setMinStock] = useState(editing?.min_stock || 5)
   const [isCylinder, setIsCylinder] = useState(editing?.is_cylinder !== false)
@@ -129,6 +137,8 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
       sale_price: parseCurrency(salePrice),
       street_sale_price: parseCurrency(streetSalePrice),
       gas_povo_sale_price: parseCurrency(gasPovoSalePrice),
+      empty_cylinder_sale_price: parseCurrency(emptyCylinderSalePrice),
+      full_no_return_sale_price: parseCurrency(fullNoReturnSalePrice),
       cost_price: parseCurrency(costPrice),
       min_stock: Number(minStock),
       is_cylinder: isCylinder,
@@ -200,7 +210,25 @@ function ProductModal({ open, editing, companyId, onClose, onSuccess }) {
               <input type="text" inputMode="numeric" className="input pl-8" placeholder="100,23"
                 value={gasPovoSalePrice} onChange={e => setGasPovoSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
             </div>
-            <p className="text-xs text-slate-500 mt-1">Usado automaticamente quando a forma de pagamento for Gás do Povo.</p>
+            <p className="text-xs text-slate-500 mt-1">Use 0,00 para produtos que não participam, como P45.</p>
+          </div>
+          <div className="form-group">
+            <label className="label">Preço Vazio / Casco *</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <input type="text" inputMode="numeric" className="input pl-8" placeholder="200,00"
+                value={emptyCylinderSalePrice} onChange={e => setEmptyCylinderSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Usado quando o cliente compra apenas o botijão vazio/casco.</p>
+          </div>
+          <div className="form-group">
+            <label className="label">Preço Cheio sem retorno *</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <input type="text" inputMode="numeric" className="input pl-8" placeholder="300,00"
+                value={fullNoReturnSalePrice} onChange={e => setFullNoReturnSalePrice(maskCurrency(e.target.value.replace(/\D/g,'')))} required />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Usado quando o cliente compra o botijão cheio sem devolver casco.</p>
           </div>
           <div className="form-group">
             <label className="label">Custo (compra)</label>

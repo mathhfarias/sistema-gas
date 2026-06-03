@@ -23,6 +23,18 @@ const CHANNEL_LABELS = {
   other: 'Outro',
 }
 
+const SALE_KIND_LABELS = {
+  exchange: 'Gás com troca',
+  empty_cylinder: 'Vazio / casco',
+  full_no_return: 'Cheio sem retorno',
+}
+
+const SALE_KIND_OPTIONS = [
+  { value: 'exchange', label: SALE_KIND_LABELS.exchange },
+  { value: 'empty_cylinder', label: SALE_KIND_LABELS.empty_cylinder },
+  { value: 'full_no_return', label: SALE_KIND_LABELS.full_no_return },
+]
+
 function toInputDate(date) {
   if (!date) return ''
   const d = typeof date === 'string' ? new Date(date) : date
@@ -40,6 +52,8 @@ function toDateTimeLocal(date) {
 
 const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
 const DEFAULT_STREET_SALE_PRICE = 125
+const DEFAULT_EMPTY_CYLINDER_SALE_PRICE = 200
+const DEFAULT_FULL_NO_RETURN_SALE_PRICE = 300
 
 function moneyToInput(value) {
   return Number(value || 0).toFixed(2).replace('.', ',')
@@ -249,7 +263,7 @@ export function SalesPage() {
                   <td className="text-xs whitespace-nowrap">{formatDateTime(s.sold_at)}</td>
                   <td className="font-medium">{s.customer_name || '—'}</td>
                   <td className="text-xs text-slate-500">
-                    {(s.sale_items || []).map(i => `${i.quantity}x ${i.product_name}`).join(', ')}
+                    {(s.sale_items || []).map(i => `${i.quantity}x ${i.product_name}${i.sale_kind && i.sale_kind !== 'exchange' ? ` (${SALE_KIND_LABELS[i.sale_kind] || i.sale_kind})` : ''}`).join(', ')}
                   </td>
                   <td className="text-xs">{s.payment_methods?.name || '—'}</td>
                   <td className="text-xs">{CHANNEL_LABELS[s.channel] || '—'}</td>
@@ -322,6 +336,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       quantity: Number(item.quantity || 1),
       unit_price: moneyToInput(item.unit_price || 0),
       cost_price: Number(item.cost_price || 0),
+      sale_kind: item.sale_kind || 'exchange',
       empty_returned: !!item.empty_returned,
       empty_qty_returned: Number(item.empty_qty_returned || 0),
     })))
@@ -332,9 +347,11 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   const isValeHub = selectedPayment?.type === 'vale_hub'
   const requiresMachine = selectedPayment?.requires_machine && !isValeHub
 
-  function getProductSalePrice(product, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub) {
+  function getProductSalePrice(product, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub, saleKind = 'exchange') {
     if (!product) return 0
-    if (gasPovo) return Number(product.gas_povo_sale_price || DEFAULT_GAS_POVO_SALE_PRICE)
+    if (saleKind === 'empty_cylinder') return Number(product.empty_cylinder_sale_price ?? DEFAULT_EMPTY_CYLINDER_SALE_PRICE)
+    if (saleKind === 'full_no_return') return Number(product.full_no_return_sale_price ?? DEFAULT_FULL_NO_RETURN_SALE_PRICE)
+    if (gasPovo) return Number(product.gas_povo_sale_price ?? DEFAULT_GAS_POVO_SALE_PRICE)
     if (!valeHub && saleChannel === 'street') return Number(product.street_sale_price || DEFAULT_STREET_SALE_PRICE)
     return Number(product.sale_price || 0)
   }
@@ -356,7 +373,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       if (!product) return item
       return {
         ...item,
-        unit_price: moneyToInput(getProductSalePrice(product, isGasPovo, nextChannel, isValeHub)),
+        unit_price: moneyToInput(getProductSalePrice(product, isGasPovo, nextChannel, isValeHub, item.sale_kind)),
       }
     }))
   }
@@ -371,7 +388,20 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
         if (product) {
           updated[index].product_name = product.name
           updated[index].cost_price = Number(product.cost_price || 0)
-          updated[index].unit_price = moneyToInput(getProductSalePrice(product))
+          updated[index].unit_price = moneyToInput(getProductSalePrice(product, isGasPovo, channel, isValeHub, updated[index].sale_kind || 'exchange'))
+        }
+      }
+
+      if (field === 'sale_kind') {
+        const product = products.find(p => p.id === updated[index].product_id)
+        updated[index].sale_kind = value
+        updated[index].unit_price = product ? moneyToInput(getProductSalePrice(product, isGasPovo, channel, isValeHub, value)) : updated[index].unit_price
+        if (value !== 'exchange') {
+          updated[index].empty_returned = false
+          updated[index].empty_qty_returned = 0
+        } else {
+          updated[index].empty_returned = true
+          updated[index].empty_qty_returned = Number(updated[index].quantity || 1)
         }
       }
 
@@ -386,6 +416,10 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       if (field === 'empty_returned') {
         updated[index].empty_qty_returned = value ? Number(updated[index].quantity || 1) : 0
       }
+      if (updated[index].sale_kind !== 'exchange') {
+        updated[index].empty_returned = false
+        updated[index].empty_qty_returned = 0
+      }
 
       return updated
     })
@@ -398,6 +432,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       quantity: 1,
       unit_price: '',
       cost_price: 0,
+      sale_kind: 'exchange',
       empty_returned: true,
       empty_qty_returned: 1,
     }])
@@ -419,7 +454,8 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       if (!product) return item
       return {
         ...item,
-        unit_price: moneyToInput(getProductSalePrice(product, gasPovo, channel, valeHub)),
+        sale_kind: gasPovo || valeHub ? 'exchange' : (item.sale_kind || 'exchange'),
+        unit_price: moneyToInput(getProductSalePrice(product, gasPovo, channel, valeHub, gasPovo || valeHub ? 'exchange' : (item.sale_kind || 'exchange'))),
       }
     }))
 
@@ -429,6 +465,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       setDeliveryFee('0,00')
       setItems(prev => prev.map(item => ({
         ...item,
+        sale_kind: 'exchange',
         empty_returned: true,
         empty_qty_returned: Number(item.quantity || 1),
       })))
@@ -444,6 +481,14 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
     if (!paymentMethodId) { toast.error('Selecione a forma de pagamento.'); return }
     if (requiresMachine && !cardMachineId) { toast.error('Selecione a maquininha.'); return }
     if (!items.length || items.some(item => !item.product_id)) { toast.error('Selecione o produto em todos os itens.'); return }
+    if (isValeHub && items.some(item => item.sale_kind !== 'exchange')) { toast.error('Vale Hub / Ultragaz só deve ser usado em venda com troca.'); return }
+    if (isGasPovo) {
+      const invalidGasPovo = items.find(item => {
+        const product = products.find(p => p.id === item.product_id)
+        return item.sale_kind !== 'exchange' || Number(product?.gas_povo_sale_price ?? 0) <= 0
+      })
+      if (invalidGasPovo) { toast.error('Gás do Povo só está disponível para produtos habilitados, como P13.'); return }
+    }
 
     setSubmitting(true)
     const { error } = await salesService.updateSale(sale.id, {
@@ -555,6 +600,20 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
                   </div>
 
                   {isCylinder && (
+                    <div className="form-group">
+                      <label className="label">Tipo da venda</label>
+                      <select
+                        className="input"
+                        value={item.sale_kind || 'exchange'}
+                        onChange={e => setItem(index, 'sale_kind', e.target.value)}
+                        disabled={isValeHub || isGasPovo}
+                      >
+                        {SALE_KIND_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {isCylinder && (item.sale_kind || 'exchange') === 'exchange' && (
                     <div className="flex items-center gap-3">
                       <input type="checkbox" className="w-4 h-4 accent-brand-600" checked={item.empty_returned} disabled={isValeHub} onChange={e => setItem(index, 'empty_returned', e.target.checked)} />
                       <span className="text-sm text-slate-600">{isValeHub ? 'Vazio vai para HUB a retornar' : 'Retornou vazio'}</span>
