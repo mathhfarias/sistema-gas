@@ -25,7 +25,23 @@ function aggregateSaleStock(items, multiplier = 1, paymentType = 'other') {
 
     const quantity = normalizeQuantity(item.quantity)
     const emptyReturned = normalizeQuantity(item.empty_qty_returned)
+    const saleKind = item.sale_kind || 'exchange'
 
+    if (saleKind === 'empty_cylinder') {
+      // Venda de casco/botijão vazio: sai do estoque de vazios.
+      current.empty_qty_change += multiplier * -quantity
+      map.set(item.product_id, current)
+      continue
+    }
+
+    if (saleKind === 'full_no_return') {
+      // Venda do botijão cheio sem retorno de vazio: sai cheio e não entra vazio.
+      current.full_qty_change += multiplier * -quantity
+      map.set(item.product_id, current)
+      continue
+    }
+
+    // Venda normal/base de troca: sai cheio e, se houver retorno, entra vazio.
     current.full_qty_change += multiplier * -quantity
 
     if (isValeHub) {
@@ -122,8 +138,9 @@ function buildSaleItems(saleId, items) {
     cost_price: normalizeMoney(item.cost_price),
     discount: normalizeMoney(item.discount),
     total: normalizeMoney(item.unit_price) * normalizeQuantity(item.quantity) - normalizeMoney(item.discount),
-    empty_returned: !!item.empty_returned,
-    empty_qty_returned: item.empty_returned ? normalizeQuantity(item.empty_qty_returned) : 0,
+    sale_kind: item.sale_kind || 'exchange',
+    empty_returned: item.sale_kind === 'exchange' ? !!item.empty_returned : false,
+    empty_qty_returned: item.sale_kind === 'exchange' && item.empty_returned ? normalizeQuantity(item.empty_qty_returned) : 0,
   }))
 }
 
@@ -350,7 +367,7 @@ export const salesService = {
         *,
         payment_methods(name, type, requires_machine),
         card_machines(name, color),
-        sale_items(*, products(name, code, sale_price, street_sale_price, gas_povo_sale_price, cost_price, is_cylinder)),
+        sale_items(*, products(name, code, sale_price, street_sale_price, gas_povo_sale_price, empty_cylinder_sale_price, full_no_return_sale_price, cost_price, is_cylinder)),
         profiles(full_name)
       `)
       .eq('company_id', company_id)
