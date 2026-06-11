@@ -21,6 +21,8 @@ export default function SettingsPage() {
   // Configurações operacionais
   const [gasPovoFee, setGasPovoFee] = useState('20,00')
   const [lowStockQty, setLowStockQty] = useState(5)
+  const [fullNoReturnInitialQty, setFullNoReturnInitialQty] = useState(69)
+  const [settingsExtra, setSettingsExtra] = useState({})
 
   useEffect(() => {
     if (companyId) loadSettings()
@@ -43,6 +45,8 @@ export default function SettingsPage() {
       const s = settRes.data
       setGasPovoFee(Number(s.gas_povo_delivery_fee || 20).toFixed(2).replace('.', ','))
       setLowStockQty(s.low_stock_alert_qty || 5)
+      setSettingsExtra(s.extra || {})
+      setFullNoReturnInitialQty(Number(s.extra?.full_no_return_initial_qty ?? 69))
     }
     setLoading(false)
   }
@@ -59,6 +63,10 @@ export default function SettingsPage() {
         company_id: companyId,
         gas_povo_delivery_fee: parseCurrency(gasPovoFee),
         low_stock_alert_qty: Number(lowStockQty),
+        extra: {
+          ...(settingsExtra || {}),
+          full_no_return_initial_qty: Number(fullNoReturnInitialQty || 0),
+        },
       }),
     ])
     setSubmitting(false)
@@ -122,6 +130,16 @@ export default function SettingsPage() {
                 onChange={e => setLowStockQty(e.target.value)}
               />
               <p className="text-xs text-slate-500 mt-1">Alerta quando estoque cheio for menor que este valor.</p>
+            </div>
+            <div className="form-group sm:col-span-2">
+              <label className="label">Histórico inicial — cheios sem retorno</label>
+              <input type="number" min="0" className="input"
+                value={fullNoReturnInitialQty}
+                onChange={e => setFullNoReturnInitialQty(e.target.value)}
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Use para registrar vendas antigas de botijão cheio sem retorno feitas antes do controle por tipo de venda. Valor atual sugerido: 69.
+              </p>
             </div>
           </div>
         </div>
