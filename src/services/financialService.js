@@ -141,4 +141,65 @@ export const financialService = {
       error: null,
     }
   },
+
+  /**
+   * Resumo operacional por tipo de venda de botijão.
+   * Usado para acompanhar venda normal com troca, venda de casco vazio
+   * e venda de botijão cheio sem retorno de vazio.
+   */
+  async getSalesByKind(company_id, start, end) {
+    const { data: sales, error } = await supabase
+      .from('sales')
+      .select('id, total, sale_items(quantity, total, sale_kind, product_name)')
+      .eq('company_id', company_id)
+      .eq('status', 'completed')
+      .gte('sold_at', start)
+      .lte('sold_at', end)
+
+    if (error) return { error }
+
+    const { data: settings } = await supabase
+      .from('settings')
+      .select('extra')
+      .eq('company_id', company_id)
+      .maybeSingle()
+
+    const labels = {
+      exchange: 'Gás com troca',
+      empty_cylinder: 'Vazio / casco',
+      full_no_return: 'Cheio sem retorno',
+    }
+
+    const grouped = {
+      exchange: { type: 'exchange', name: labels.exchange, quantity: 0, revenue: 0, salesCount: 0 },
+      empty_cylinder: { type: 'empty_cylinder', name: labels.empty_cylinder, quantity: 0, revenue: 0, salesCount: 0 },
+      full_no_return: { type: 'full_no_return', name: labels.full_no_return, quantity: 0, revenue: 0, salesCount: 0 },
+    }
+
+    sales.forEach(sale => {
+      const seenTypes = new Set()
+      ;(sale.sale_items || []).forEach(item => {
+        const type = item.sale_kind || 'exchange'
+        if (!grouped[type]) grouped[type] = { type, name: labels[type] || type, quantity: 0, revenue: 0, salesCount: 0 }
+        grouped[type].quantity += Number(item.quantity || 0)
+        grouped[type].revenue += Number(item.total || 0)
+        seenTypes.add(type)
+      })
+      seenTypes.forEach(type => {
+        if (grouped[type]) grouped[type].salesCount += 1
+      })
+    })
+
+    const historicalFullNoReturnQty = Number(settings?.extra?.full_no_return_initial_qty || 0)
+
+    return {
+      data: {
+        items: Object.values(grouped),
+        historicalFullNoReturnQty,
+        fullNoReturnTotalWithHistory: grouped.full_no_return.quantity + historicalFullNoReturnQty,
+      },
+      error: null,
+    }
+  },
+
 }
