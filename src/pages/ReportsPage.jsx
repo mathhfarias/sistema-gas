@@ -15,6 +15,7 @@ export default function ReportsPage() {
   const [data, setData] = useState(null)
   const [byPayment, setByPayment] = useState([])
   const [byMachine, setByMachine] = useState([])
+  const [bySaleKind, setBySaleKind] = useState(null)
 
   const [period, setPeriod] = useState('month')
   const [startDate, setStartDate] = useState('')
@@ -47,14 +48,16 @@ export default function ReportsPage() {
   async function loadReport() {
     setLoading(true)
     const { start, end } = getRange()
-    const [plRes, payRes, machRes] = await Promise.all([
+    const [plRes, payRes, machRes, kindRes] = await Promise.all([
       financialService.getProfitLoss(companyId, start, end),
       financialService.getRevenueByPayment(companyId, start, end),
       financialService.getRevenueByMachine(companyId, start, end),
+      financialService.getSalesByKind(companyId, start, end),
     ])
     if (plRes.data) setData(plRes.data)
     if (payRes.data) setByPayment(payRes.data)
     if (machRes.data) setByMachine(machRes.data)
+    if (kindRes.data) setBySaleKind(kindRes.data)
     setLoading(false)
   }
 
@@ -156,6 +159,52 @@ export default function ReportsPage() {
               </div>
             )}
           </div>
+
+          {/* Controle operacional por tipo de venda */}
+          <div className="card">
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="font-display text-sm font-semibold text-slate-700">Tipos de venda de botijão</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Acompanhe venda normal com troca, venda de casco vazio e venda de cheio sem retorno.
+                </p>
+              </div>
+              {bySaleKind?.historicalFullNoReturnQty > 0 && (
+                <div className="px-3 py-2 rounded-xl bg-slate-900 text-white text-right">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-300">Cheios sem retorno acumulado</p>
+                  <p className="text-lg font-bold">{bySaleKind.fullNoReturnTotalWithHistory}</p>
+                  <p className="text-[11px] text-slate-300">
+                    inclui {bySaleKind.historicalFullNoReturnQty} histórico inicial
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3">
+              {(bySaleKind?.items || []).map(item => (
+                <div key={item.type} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">{item.name}</p>
+                      <p className="text-2xl font-bold text-slate-800 mt-1">{item.quantity}</p>
+                    </div>
+                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-500">
+                      {item.salesCount} vendas
+                    </span>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-slate-200 flex justify-between text-sm">
+                    <span className="text-slate-500">Receita</span>
+                    <span className="font-semibold text-slate-700">{formatCurrency(item.revenue)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 p-3 rounded-lg border border-blue-100 bg-blue-50 text-xs text-blue-800">
+              <strong>Como usar:</strong> venda de casco vazio baixa vazios; cheio sem retorno baixa cheios sem gerar vazio; gás com troca segue a operação normal.
+            </div>
+          </div>
+
 
           {/* Gráficos lado a lado */}
           <div className="grid lg:grid-cols-2 gap-4">
