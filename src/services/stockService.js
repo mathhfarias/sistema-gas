@@ -30,6 +30,7 @@ export const stockService = {
    * Regra atual:
    * - Entrada de cheios: full_qty aumenta.
    * - Vazios devolvidos no ato da compra: empty_qty diminui.
+   * - Frete fica registrado na compra e entra no custo total da chegada.
    *
    * Para troca enviada antes ao fornecedor, usar receiveFromExchange().
    */
@@ -41,10 +42,13 @@ export const stockService = {
       items, // [{ product_id, product_name, quantity, unit_cost, empty_returned }]
       notes,
       purchased_at,
+      freight_cost = 0,
       created_by,
     } = payload
 
-    const total_cost = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0)
+    const items_cost = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0)
+    const normalizedFreightCost = Number(freight_cost || 0)
+    const total_cost = items_cost + normalizedFreightCost
 
     const { data: purchase, error: purchaseError } = await supabase
       .from('purchases')
@@ -53,6 +57,7 @@ export const stockService = {
         supplier_id,
         supplier_name,
         total_cost,
+        freight_cost: normalizedFreightCost,
         notes,
         purchased_at: purchased_at || new Date().toISOString(),
         created_by,
@@ -114,13 +119,22 @@ export const stockService = {
       return { error: { message: 'O motivo do ajuste é obrigatório.' } }
     }
 
+    const normalizedExchangeChange = normalizeQuantity(exchange_qty_change)
+    const normalizedFullChange = normalizeQuantity(full_qty_change)
+
+    // Regra operacional: sempre que um botijão entrar em troca, ele sai do saldo de cheios.
+    // Isso evita ficar com 1 cheio a mais quando um botijão cheio é separado por vazamento/defeito.
+    const finalFullChange = normalizedExchangeChange > 0 && normalizedFullChange === 0
+      ? -normalizedExchangeChange
+      : normalizedFullChange
+
     return supabase.from('stock_movements').insert({
       company_id,
       product_id,
       type: 'adjustment',
-      full_qty_change: normalizeQuantity(full_qty_change),
+      full_qty_change: finalFullChange,
       empty_qty_change: normalizeQuantity(empty_qty_change),
-      exchange_qty_change: normalizeQuantity(exchange_qty_change),
+      exchange_qty_change: normalizedExchangeChange,
       hub_pending_qty_change: normalizeQuantity(hub_pending_qty_change),
       reason,
       performed_by,
@@ -128,8 +142,8 @@ export const stockService = {
   },
 
   /**
-   * Envia botijões vazios para troca com fornecedor.
-   * Fluxo: vazios diminui, em troca aumenta.
+   * Envia botijões cheios para troca com fornecedor.
+   * Fluxo: cheios diminui, em troca aumenta.
    */
   async sendToExchange({ company_id, product_id, quantity, reason, performed_by }) {
     const qty = normalizeQuantity(quantity)
@@ -140,11 +154,11 @@ export const stockService = {
       company_id,
       product_id,
       type: 'exchange_out',
-      full_qty_change: 0,
-      empty_qty_change: -qty,
+      full_qty_change: -qty,
+      empty_qty_change: 0,
       exchange_qty_change: qty,
       hub_pending_qty_change: 0,
-      reason: reason?.trim() || 'Envio de vazios para troca',
+      reason: reason?.trim() || 'Envio de botijão cheio para troca',
       performed_by,
     })
   },

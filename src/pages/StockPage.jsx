@@ -390,7 +390,7 @@ function ExchangeModal({ open, action, item, companyId, userId, onClose, onSucce
         <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 text-sm text-slate-600">
           {isSend ? (
             <p>
-              Esta ação diminui o saldo de <strong>vazios</strong> e aumenta o saldo <strong>em troca</strong>.
+              Esta ação diminui o saldo de <strong>cheios</strong> e aumenta o saldo <strong>em troca</strong>.
             </p>
           ) : (
             <p>
@@ -416,7 +416,7 @@ function ExchangeModal({ open, action, item, companyId, userId, onClose, onSucce
           <textarea
             className="input resize-none"
             rows={3}
-            placeholder={isSend ? 'Ex: Enviado para troca com fornecedor' : 'Ex: Recebido retorno da troca'}
+            placeholder={isSend ? 'Ex: Botijão cheio vazando enviado para troca' : 'Ex: Recebido retorno da troca'}
             value={reason}
             onChange={e => setReason(e.target.value)}
           />

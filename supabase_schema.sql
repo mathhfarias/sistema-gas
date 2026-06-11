@@ -249,6 +249,7 @@ CREATE TABLE IF NOT EXISTS purchases (
   supplier_id UUID REFERENCES suppliers(id),
   supplier_name TEXT,
   total_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
+  freight_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
   notes TEXT,
   purchased_at TIMESTAMPTZ DEFAULT NOW(),
   created_by UUID REFERENCES profiles(id),
@@ -442,6 +443,39 @@ BEGIN
 END $$;
 
 -- Função para atualizar saldo de estoque
+
+-- ============================================================
+-- FUNÇÃO: normalizar entrada de troca
+-- Regra: quando um botijão entra em troca, ele sai dos cheios.
+-- ============================================================
+CREATE OR REPLACE FUNCTION normalize_exchange_stock_movement()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF COALESCE(NEW.exchange_qty_change, 0) > 0 THEN
+    IF NEW.type = 'exchange_out' THEN
+      IF COALESCE(NEW.full_qty_change, 0) = 0 THEN
+        NEW.full_qty_change := -COALESCE(NEW.exchange_qty_change, 0);
+      END IF;
+
+      IF COALESCE(NEW.empty_qty_change, 0) < 0 THEN
+        NEW.empty_qty_change := 0;
+      END IF;
+    ELSIF NEW.type = 'adjustment' THEN
+      IF COALESCE(NEW.full_qty_change, 0) = 0 THEN
+        NEW.full_qty_change := -COALESCE(NEW.exchange_qty_change, 0);
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_normalize_exchange_stock_movement ON stock_movements;
+CREATE TRIGGER trg_normalize_exchange_stock_movement
+BEFORE INSERT ON stock_movements
+FOR EACH ROW EXECUTE FUNCTION normalize_exchange_stock_movement();
+
 CREATE OR REPLACE FUNCTION update_stock_balance()
 RETURNS TRIGGER AS $$
 DECLARE
