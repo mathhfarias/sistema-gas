@@ -50,6 +50,7 @@ export default function PurchasesPage() {
                 <th>Data</th>
                 <th>Fornecedor</th>
                 <th>Itens</th>
+                <th className="text-right">Frete</th>
                 <th className="text-right">Total</th>
               </tr>
             </thead>
@@ -62,6 +63,7 @@ export default function PurchasesPage() {
                   <td className="text-xs text-slate-500">
                     {(p.purchase_items || []).map(i => `${i.quantity}x ${i.product_name}`).join(', ')}
                   </td>
+                  <td className="text-right text-xs currency text-slate-500">{formatCurrency(p.freight_cost || 0)}</td>
                   <td className="text-right font-semibold currency">{formatCurrency(p.total_cost)}</td>
                 </tr>
               ))}
@@ -88,6 +90,7 @@ function PurchaseModal({ open, companyId, userId, onClose, onSuccess }) {
   const [supplierName, setSupplierName] = useState('')
   const [items, setItems] = useState([{ product_id: '', product_name: '', quantity: 1, unit_cost: '', empty_returned: 0 }])
   const [notes, setNotes] = useState('')
+  const [freightCost, setFreightCost] = useState('0,00')
   const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().slice(0, 16))
   const [submitting, setSubmitting] = useState(false)
 
@@ -113,7 +116,9 @@ function PurchaseModal({ open, companyId, userId, onClose, onSuccess }) {
     })
   }
 
-  const total = items.reduce((s, i) => s + (parseCurrency(i.unit_cost) * Number(i.quantity || 0)), 0)
+  const itemsTotal = items.reduce((s, i) => s + (parseCurrency(i.unit_cost) * Number(i.quantity || 0)), 0)
+  const freightTotal = parseCurrency(freightCost)
+  const total = itemsTotal + freightTotal
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -130,6 +135,7 @@ function PurchaseModal({ open, companyId, userId, onClose, onSuccess }) {
         empty_returned: Number(i.empty_returned || 0),
       })),
       notes,
+      freight_cost: freightTotal,
       purchased_at: new Date(purchasedAt).toISOString(),
       created_by: userId,
     })
@@ -204,14 +210,42 @@ function PurchaseModal({ open, companyId, userId, onClose, onSuccess }) {
           ))}
         </div>
 
-        <div className="form-group">
-          <label className="label">Observações</label>
-          <textarea className="input resize-none" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="form-group">
+            <label className="label">Frete da chegada</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="input pl-8"
+                placeholder="0,00"
+                value={freightCost}
+                onChange={e => setFreightCost(maskCurrency(e.target.value.replace(/\D/g,'')))}
+              />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Opcional. Entra no custo total da chegada.</p>
+          </div>
+
+          <div className="form-group">
+            <label className="label">Observações</label>
+            <textarea className="input resize-none" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+          </div>
         </div>
 
-        <div className="bg-slate-100 rounded-xl p-3 flex justify-between items-center">
-          <span className="text-sm text-slate-600 font-medium">Total da compra</span>
-          <span className="font-bold text-lg text-slate-800">{formatCurrency(total)}</span>
+        <div className="bg-slate-100 rounded-xl p-3 space-y-1">
+          <div className="flex justify-between items-center text-sm text-slate-600">
+            <span>Produtos</span>
+            <span className="currency">{formatCurrency(itemsTotal)}</span>
+          </div>
+          <div className="flex justify-between items-center text-sm text-slate-600">
+            <span>Frete</span>
+            <span className="currency">{formatCurrency(freightTotal)}</span>
+          </div>
+          <div className="border-t border-slate-200 pt-2 flex justify-between items-center">
+            <span className="text-sm text-slate-600 font-medium">Total da compra</span>
+            <span className="font-bold text-lg text-slate-800">{formatCurrency(total)}</span>
+          </div>
         </div>
 
         <div className="flex gap-2 justify-end">
