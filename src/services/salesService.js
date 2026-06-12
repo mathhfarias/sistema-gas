@@ -61,6 +61,95 @@ function aggregateSaleStock(items, multiplier = 1, paymentType = 'other') {
   return Array.from(map.values())
 }
 
+
+function normalizePaymentSplits(payment_splits, total = 0, fallback = {}) {
+  const cleaned = (payment_splits || [])
+    .map(split => ({
+      payment_method_id: split.payment_method_id || '',
+      card_machine_id: split.card_machine_id || null,
+      amount: normalizeMoney(split.amount),
+    }))
+    .filter(split => split.payment_method_id && split.amount > 0)
+
+  if (cleaned.length) return cleaned
+
+  if (fallback.payment_method_id) {
+    return [{
+      payment_method_id: fallback.payment_method_id,
+      card_machine_id: fallback.card_machine_id || null,
+      amount: normalizeMoney(total),
+    }]
+  }
+
+  return []
+}
+
+async function enrichPaymentSplits(paymentSplits) {
+  const methodIds = [...new Set(paymentSplits.map(split => split.payment_method_id).filter(Boolean))]
+
+  if (!methodIds.length) return { data: [], error: null }
+
+  const { data: methods, error } = await supabase
+    .from('payment_methods')
+    .select('id, type, name, requires_machine')
+    .in('id', methodIds)
+
+  if (error) return { error }
+
+  const methodMap = new Map((methods || []).map(method => [method.id, method]))
+  const enriched = paymentSplits.map(split => ({
+    ...split,
+    payment_method: methodMap.get(split.payment_method_id),
+  }))
+
+  return { data: enriched, error: null }
+}
+
+function validatePaymentSplits(paymentSplits, total, enrichedSplits = []) {
+  if (!paymentSplits.length) {
+    return { error: { message: 'Informe pelo menos uma forma de pagamento.' } }
+  }
+
+  const paidTotal = paymentSplits.reduce((sum, split) => sum + normalizeMoney(split.amount), 0)
+  const diff = Math.abs(paidTotal - normalizeMoney(total))
+
+  if (diff > 0.01) {
+    return {
+      error: {
+        message: `O total pago (${paidTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) precisa ser igual ao total da venda (${normalizeMoney(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}).`,
+      },
+    }
+  }
+
+  for (const split of enrichedSplits) {
+    if (split.payment_method?.requires_machine && !split.card_machine_id && split.payment_method?.type !== 'vale_hub') {
+      return { error: { message: `Selecione a maquininha para ${split.payment_method?.name || 'pagamento com cartão'}.` } }
+    }
+  }
+
+  const specialPayments = enrichedSplits.filter(split => ['gas_povo', 'vale_hub'].includes(split.payment_method?.type))
+  if (paymentSplits.length > 1 && specialPayments.length) {
+    return { error: { message: 'Pagamento dividido não deve usar Gás do Povo ou Vale Hub. Registre essas modalidades em venda separada.' } }
+  }
+
+  return { error: null }
+}
+
+function getPaymentTypeForStock(enrichedSplits, legacyPaymentType = 'other') {
+  if (enrichedSplits.length === 1) return enrichedSplits[0].payment_method?.type || legacyPaymentType || 'other'
+  return 'other'
+}
+
+function buildSalePayments(saleId, companyId, paymentSplits) {
+  return paymentSplits.map(split => ({
+    sale_id: saleId,
+    company_id: companyId,
+    payment_method_id: split.payment_method_id,
+    card_machine_id: split.card_machine_id || null,
+    amount: normalizeMoney(split.amount),
+  }))
+}
+
 function combineStockMovements(...movementGroups) {
   const map = new Map()
 
@@ -165,6 +254,7 @@ export const salesService = {
       customer_name,
       payment_method_id,
       card_machine_id,
+      payment_splits = [],
       channel = 'street',
       items,
       delivery_fee = 0,
@@ -174,21 +264,22 @@ export const salesService = {
       created_by,
     } = payload
 
-    const { data: paymentMethod, error: paymentError } = await supabase
-      .from('payment_methods')
-      .select('type, requires_machine')
-      .eq('id', payment_method_id)
-      .maybeSingle()
-
-    if (paymentError) return { error: paymentError }
-
-    const paymentType = paymentMethod?.type || 'other'
     const normalizedItems = buildSaleItems(null, items)
+    const { subtotal, total } = calculateSaleTotals(normalizedItems, delivery_fee, discount)
+
+    const normalizedPayments = normalizePaymentSplits(payment_splits, total, { payment_method_id, card_machine_id })
+    const paymentInfo = await enrichPaymentSplits(normalizedPayments)
+    if (paymentInfo.error) return { error: paymentInfo.error }
+
+    const paymentValidation = validatePaymentSplits(normalizedPayments, total, paymentInfo.data)
+    if (paymentValidation.error) return paymentValidation
+
+    const primaryPayment = normalizedPayments[0]
+    const paymentType = getPaymentTypeForStock(paymentInfo.data, 'other')
+
     const stockMovements = aggregateSaleStock(normalizedItems, 1, paymentType)
     const stockValidation = await validateStock(company_id, stockMovements)
     if (stockValidation.error) return stockValidation
-
-    const { subtotal, total } = calculateSaleTotals(normalizedItems, delivery_fee, discount)
 
     const { data: sale, error: saleError } = await supabase
       .from('sales')
@@ -196,8 +287,8 @@ export const salesService = {
         company_id,
         customer_id: customer_id || null,
         customer_name,
-        payment_method_id,
-        card_machine_id: paymentType === 'vale_hub' ? null : (card_machine_id || null),
+        payment_method_id: primaryPayment.payment_method_id,
+        card_machine_id: paymentType === 'vale_hub' ? null : (primaryPayment.card_machine_id || null),
         channel,
         subtotal,
         delivery_fee,
@@ -211,6 +302,13 @@ export const salesService = {
       .single()
 
     if (saleError) return { error: saleError }
+
+    const salePayments = buildSalePayments(sale.id, company_id, normalizedPayments)
+    const { error: paymentsError } = await supabase
+      .from('sale_payments')
+      .insert(salePayments)
+
+    if (paymentsError) return { error: paymentsError }
 
     const saleItems = buildSaleItems(sale.id, items)
 
@@ -252,6 +350,7 @@ export const salesService = {
       customer_name,
       payment_method_id,
       card_machine_id,
+      payment_splits = [],
       channel = 'street',
       items,
       delivery_fee = 0,
@@ -263,7 +362,7 @@ export const salesService = {
 
     const { data: oldSale, error: oldSaleError } = await supabase
       .from('sales')
-      .select('id, sale_number, status, payment_methods(type)')
+      .select('id, sale_number, status, payment_methods(type), sale_payments(payment_method_id, card_machine_id, amount, payment_methods(type, name, requires_machine))')
       .eq('id', saleId)
       .eq('company_id', company_id)
       .single()
@@ -280,17 +379,20 @@ export const salesService = {
 
     if (oldItemsError) return { error: oldItemsError }
 
-    const { data: newPaymentMethod, error: newPaymentError } = await supabase
-      .from('payment_methods')
-      .select('type, requires_machine')
-      .eq('id', payment_method_id)
-      .maybeSingle()
-
-    if (newPaymentError) return { error: newPaymentError }
-
-    const oldPaymentType = oldSale.payment_methods?.type || 'other'
-    const newPaymentType = newPaymentMethod?.type || 'other'
     const normalizedNewItems = buildSaleItems(saleId, items)
+    const { subtotal, total } = calculateSaleTotals(normalizedNewItems, delivery_fee, discount)
+
+    const normalizedPayments = normalizePaymentSplits(payment_splits, total, { payment_method_id, card_machine_id })
+    const paymentInfo = await enrichPaymentSplits(normalizedPayments)
+    if (paymentInfo.error) return { error: paymentInfo.error }
+
+    const paymentValidation = validatePaymentSplits(normalizedPayments, total, paymentInfo.data)
+    if (paymentValidation.error) return paymentValidation
+
+    const primaryPayment = normalizedPayments[0]
+    const oldPaymentType = getPaymentTypeForStock(oldSale.sale_payments || [], oldSale.payment_methods?.type || 'other')
+    const newPaymentType = getPaymentTypeForStock(paymentInfo.data, 'other')
+
     const reverseOld = aggregateSaleStock(oldItems || [], -1, oldPaymentType)
     const applyNew = aggregateSaleStock(normalizedNewItems, 1, newPaymentType)
     const stockDiff = combineStockMovements(reverseOld, applyNew)
@@ -298,15 +400,13 @@ export const salesService = {
     const stockValidation = await validateStock(company_id, stockDiff)
     if (stockValidation.error) return stockValidation
 
-    const { subtotal, total } = calculateSaleTotals(normalizedNewItems, delivery_fee, discount)
-
     const { error: updateError } = await supabase
       .from('sales')
       .update({
         customer_id: customer_id || null,
         customer_name,
-        payment_method_id,
-        card_machine_id: newPaymentType === 'vale_hub' ? null : (card_machine_id || null),
+        payment_method_id: primaryPayment.payment_method_id,
+        card_machine_id: newPaymentType === 'vale_hub' ? null : (primaryPayment.card_machine_id || null),
         channel,
         subtotal,
         delivery_fee,
@@ -320,6 +420,19 @@ export const salesService = {
       .eq('company_id', company_id)
 
     if (updateError) return { error: updateError }
+
+    const { error: deletePaymentsError } = await supabase
+      .from('sale_payments')
+      .delete()
+      .eq('sale_id', saleId)
+
+    if (deletePaymentsError) return { error: deletePaymentsError }
+
+    const { error: insertPaymentsError } = await supabase
+      .from('sale_payments')
+      .insert(buildSalePayments(saleId, company_id, normalizedPayments))
+
+    if (insertPaymentsError) return { error: insertPaymentsError }
 
     const { error: deleteItemsError } = await supabase
       .from('sale_items')
@@ -367,6 +480,7 @@ export const salesService = {
         *,
         payment_methods(name, type, requires_machine),
         card_machines(name, color),
+        sale_payments(amount, payment_method_id, card_machine_id, payment_methods(name, type, requires_machine), card_machines(name, color)),
         sale_items(*, products(name, code, sale_price, street_sale_price, gas_povo_sale_price, empty_cylinder_sale_price, full_no_return_sale_price, cost_price, is_cylinder)),
         profiles(full_name)
       `)
@@ -391,7 +505,7 @@ export const salesService = {
 
     const { data, error } = await supabase
       .from('sales')
-      .select('total, delivery_fee, subtotal, sale_items(quantity), payment_methods(type, name)')
+      .select('total, delivery_fee, subtotal, sale_items(quantity), payment_methods(type, name), sale_payments(amount, payment_methods(type, name))')
       .eq('company_id', company_id)
       .eq('status', 'completed')
       .gte('sold_at', today.toISOString())
@@ -408,11 +522,15 @@ export const salesService = {
 
     const byPayment = {}
     data.forEach(s => {
-      const type = s.payment_methods?.type || 'other'
-      const name = s.payment_methods?.name || 'Outro'
-      if (!byPayment[type]) byPayment[type] = { name, total: 0, count: 0 }
-      byPayment[type].total += Number(s.total)
-      byPayment[type].count += 1
+      const payments = s.sale_payments?.length
+        ? s.sale_payments.map(p => ({ type: p.payment_methods?.type || 'other', name: p.payment_methods?.name || 'Outro', amount: Number(p.amount || 0) }))
+        : [{ type: s.payment_methods?.type || 'other', name: s.payment_methods?.name || 'Outro', amount: Number(s.total || 0) }]
+
+      payments.forEach(payment => {
+        if (!byPayment[payment.type]) byPayment[payment.type] = { name: payment.name, total: 0, count: 0 }
+        byPayment[payment.type].total += payment.amount
+        byPayment[payment.type].count += 1
+      })
     })
 
     return {
@@ -427,7 +545,7 @@ export const salesService = {
   async cancelSale(saleId, company_id, userId) {
     const { data: sale } = await supabase
       .from('sales')
-      .select('sale_number, status, payment_methods(type)')
+      .select('sale_number, status, payment_methods(type), sale_payments(payment_methods(type, name, requires_machine))')
       .eq('id', saleId)
       .eq('company_id', company_id)
       .maybeSingle()
@@ -443,7 +561,7 @@ export const salesService = {
 
     if (itemsError) return { error: itemsError }
 
-    const paymentType = sale?.payment_methods?.type || 'other'
+    const paymentType = getPaymentTypeForStock(sale?.sale_payments || [], sale?.payment_methods?.type || 'other')
     const reverseMovements = aggregateSaleStock(items || [], -1, paymentType)
     const stockValidation = await validateStock(company_id, reverseMovements)
     if (stockValidation.error) return stockValidation

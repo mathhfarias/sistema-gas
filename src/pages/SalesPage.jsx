@@ -59,6 +59,22 @@ function moneyToInput(value) {
   return Number(value || 0).toFixed(2).replace('.', ',')
 }
 
+const DEFAULT_PAYMENT_SPLIT = {
+  payment_method_id: '',
+  card_machine_id: '',
+  amount: '',
+}
+
+function formatSalePayments(sale) {
+  if (sale?.sale_payments?.length) {
+    return sale.sale_payments
+      .map(payment => `${payment.payment_methods?.name || 'Pagamento'} ${formatCurrency(payment.amount || 0)}`)
+      .join(' + ')
+  }
+
+  return sale?.payment_methods?.name || '—'
+}
+
 function getPeriodRange(period, startDate, endDate) {
   const now = new Date()
 
@@ -153,7 +169,8 @@ export function SalesPage() {
     return (
       (s.customer_name || '').toLowerCase().includes(term) ||
       String(s.sale_number || '').includes(term) ||
-      (s.payment_methods?.name || '').toLowerCase().includes(term)
+      (s.payment_methods?.name || '').toLowerCase().includes(term) ||
+      (s.sale_payments || []).some(payment => (payment.payment_methods?.name || '').toLowerCase().includes(term))
     )
   })
 
@@ -265,7 +282,7 @@ export function SalesPage() {
                   <td className="text-xs text-slate-500">
                     {(s.sale_items || []).map(i => `${i.quantity}x ${i.product_name}${i.sale_kind && i.sale_kind !== 'exchange' ? ` (${SALE_KIND_LABELS[i.sale_kind] || i.sale_kind})` : ''}`).join(', ')}
                   </td>
-                  <td className="text-xs">{s.payment_methods?.name || '—'}</td>
+                  <td className="text-xs">{formatSalePayments(s)}</td>
                   <td className="text-xs">{CHANNEL_LABELS[s.channel] || '—'}</td>
                   <td className="text-right text-xs currency">{formatCurrency(s.delivery_fee || 0)}</td>
                   <td className="text-right font-semibold currency">{formatCurrency(s.total)}</td>
@@ -312,6 +329,8 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   const [customerName, setCustomerName] = useState('')
   const [paymentMethodId, setPaymentMethodId] = useState('')
   const [cardMachineId, setCardMachineId] = useState('')
+  const [isSplitPayment, setIsSplitPayment] = useState(false)
+  const [paymentSplits, setPaymentSplits] = useState([{ ...DEFAULT_PAYMENT_SPLIT }])
   const [channel, setChannel] = useState('street')
   const [deliveryFee, setDeliveryFee] = useState('')
   const [discount, setDiscount] = useState('')
@@ -323,8 +342,22 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   useEffect(() => {
     if (!sale) return
     setCustomerName(sale.customer_name || 'Venda avulsa')
+    const salePayments = sale.sale_payments || []
     setPaymentMethodId(sale.payment_method_id || '')
     setCardMachineId(sale.card_machine_id || '')
+    setIsSplitPayment(salePayments.length > 1)
+    setPaymentSplits(salePayments.length
+      ? salePayments.map(payment => ({
+          payment_method_id: payment.payment_method_id || '',
+          card_machine_id: payment.card_machine_id || '',
+          amount: moneyToInput(payment.amount || 0),
+        }))
+      : [{
+          payment_method_id: sale.payment_method_id || '',
+          card_machine_id: sale.card_machine_id || '',
+          amount: moneyToInput(sale.total || 0),
+        }]
+    )
     setChannel(sale.channel || 'street')
     setDeliveryFee(moneyToInput(sale.delivery_fee || 0))
     setDiscount(moneyToInput(sale.discount || 0))
@@ -343,9 +376,51 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
   }, [sale])
 
   const selectedPayment = paymentMethods.find(pm => pm.id === paymentMethodId)
-  const isGasPovo = selectedPayment?.type === 'gas_povo'
-  const isValeHub = selectedPayment?.type === 'vale_hub'
-  const requiresMachine = selectedPayment?.requires_machine && !isValeHub
+  const isGasPovo = !isSplitPayment && selectedPayment?.type === 'gas_povo'
+  const isValeHub = !isSplitPayment && selectedPayment?.type === 'vale_hub'
+  const requiresMachine = !isSplitPayment && selectedPayment?.requires_machine && !isValeHub
+
+  function getPaymentMethodById(id) {
+    return paymentMethods.find(pm => pm.id === id)
+  }
+
+  function paymentMethodRequiresMachine(id) {
+    const method = getPaymentMethodById(id)
+    return !!method?.requires_machine && method?.type !== 'vale_hub'
+  }
+
+  function setSplitPayment(enabled) {
+    setIsSplitPayment(enabled)
+    setPaymentMethodId('')
+    setCardMachineId('')
+    setPaymentSplits([{ ...DEFAULT_PAYMENT_SPLIT }])
+  }
+
+  function setPaymentSplit(index, field, value) {
+    setPaymentSplits(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], [field]: value }
+      if (field === 'payment_method_id') {
+        const method = paymentMethods.find(pm => pm.id === value)
+        if (!method?.requires_machine || method?.type === 'vale_hub') updated[index].card_machine_id = ''
+      }
+      return updated
+    })
+  }
+
+  function addPaymentSplit() {
+    setPaymentSplits(prev => [...prev, { ...DEFAULT_PAYMENT_SPLIT }])
+  }
+
+  function removePaymentSplit(index) {
+    setPaymentSplits(prev => prev.length > 1 ? prev.filter((_, i) => i !== index) : prev)
+  }
+
+  function fillSplitRemaining(index) {
+    const othersTotal = paymentSplits.reduce((sum, split, i) => i === index ? sum : sum + parseCurrency(split.amount), 0)
+    const remaining = Math.max(0, total - othersTotal)
+    setPaymentSplit(index, 'amount', moneyToInput(remaining))
+  }
 
   function getProductSalePrice(product, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub, saleKind = 'exchange') {
     if (!product) return 0
@@ -474,12 +549,23 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
 
   const subtotal = items.reduce((sum, item) => sum + parseCurrency(item.unit_price) * Number(item.quantity || 0), 0)
   const total = subtotal + parseCurrency(deliveryFee) - parseCurrency(discount)
+  const splitPaidTotal = paymentSplits.reduce((sum, split) => sum + parseCurrency(split.amount), 0)
+  const splitRemaining = total - splitPaidTotal
 
   async function handleSubmit(e) {
     e.preventDefault()
 
-    if (!paymentMethodId) { toast.error('Selecione a forma de pagamento.'); return }
+    if (!isSplitPayment && !paymentMethodId) { toast.error('Selecione a forma de pagamento.'); return }
     if (requiresMachine && !cardMachineId) { toast.error('Selecione a maquininha.'); return }
+    if (isSplitPayment) {
+      const validSplits = paymentSplits.filter(split => split.payment_method_id && parseCurrency(split.amount) > 0)
+      if (validSplits.length < 2) { toast.error('Informe pelo menos duas formas de pagamento.'); return }
+      if (Math.abs(splitPaidTotal - total) > 0.01) { toast.error('A soma dos pagamentos precisa ser igual ao total da venda.'); return }
+      const missingMachine = validSplits.find(split => paymentMethodRequiresMachine(split.payment_method_id) && !split.card_machine_id)
+      if (missingMachine) { toast.error('Selecione a maquininha para o pagamento com cartão.'); return }
+      const hasSpecial = validSplits.some(split => ['gas_povo', 'vale_hub'].includes(getPaymentMethodById(split.payment_method_id)?.type))
+      if (hasSpecial) { toast.error('Pagamento dividido não deve usar Gás do Povo ou Vale Hub.'); return }
+    }
     if (!items.length || items.some(item => !item.product_id)) { toast.error('Selecione o produto em todos os itens.'); return }
     if (isValeHub && items.some(item => item.sale_kind !== 'exchange')) { toast.error('Vale Hub / Ultragaz só deve ser usado em venda com troca.'); return }
     if (isGasPovo) {
@@ -495,8 +581,17 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
       company_id: companyId,
       customer_id: sale.customer_id || null,
       customer_name: customerName || 'Venda avulsa',
-      payment_method_id: paymentMethodId,
-      card_machine_id: cardMachineId || null,
+      payment_method_id: isSplitPayment ? paymentSplits.find(split => split.payment_method_id)?.payment_method_id : paymentMethodId,
+      card_machine_id: isSplitPayment ? (paymentSplits.find(split => split.payment_method_id)?.card_machine_id || null) : (cardMachineId || null),
+      payment_splits: isSplitPayment
+        ? paymentSplits
+            .filter(split => split.payment_method_id && parseCurrency(split.amount) > 0)
+            .map(split => ({
+              payment_method_id: split.payment_method_id,
+              card_machine_id: split.card_machine_id || null,
+              amount: parseCurrency(split.amount),
+            }))
+        : [{ payment_method_id: paymentMethodId, card_machine_id: cardMachineId || null, amount: total }],
       channel,
       delivery_fee: parseCurrency(deliveryFee),
       discount: parseCurrency(discount),
@@ -532,32 +627,108 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
             </div>
           </div>
 
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div className="form-group">
-              <label className="label">Forma de pagamento</label>
-              <select className="input" value={paymentMethodId} onChange={e => handlePaymentChange(e.target.value)} required>
-                <option value="">Selecionar...</option>
-                {paymentMethods.map(pm => <option key={pm.id} value={pm.id}>{pm.name}</option>)}
-              </select>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="font-semibold text-slate-700">Pagamento</h4>
+              <button type="button" className={`btn-sm ${isSplitPayment ? 'btn-primary' : 'btn-outline'}`} onClick={() => setSplitPayment(!isSplitPayment)}>
+                {isSplitPayment ? 'Pagamento dividido ativo' : 'Dividir pagamento'}
+              </button>
             </div>
-            {requiresMachine && (
+
+            {!isSplitPayment ? (
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="form-group">
+                  <label className="label">Forma de pagamento</label>
+                  <select className="input" value={paymentMethodId} onChange={e => handlePaymentChange(e.target.value)} required>
+                    <option value="">Selecionar...</option>
+                    {paymentMethods.map(pm => <option key={pm.id} value={pm.id}>{pm.name}</option>)}
+                  </select>
+                </div>
+                {requiresMachine && (
+                  <div className="form-group">
+                    <label className="label">Maquininha</label>
+                    <select className="input" value={cardMachineId} onChange={e => setCardMachineId(e.target.value)} required>
+                      <option value="">Selecionar...</option>
+                      {cardMachines.map(cm => <option key={cm.id} value={cm.id}>{cm.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="form-group">
+                  <label className="label">Canal</label>
+                  <select className="input" value={channel} onChange={e => handleChannelChange(e.target.value)}>
+                    <option value="street">Rua / entrega</option>
+                    <option value="counter">Portaria / retirada</option>
+                    <option value="delivery">Entrega</option>
+                    <option value="other">Outro</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {paymentSplits.map((split, idx) => {
+                  const method = getPaymentMethodById(split.payment_method_id)
+                  const splitRequiresMachine = method?.requires_machine && method?.type !== 'vale_hub'
+                  return (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Pagamento {idx + 1}</span>
+                        {paymentSplits.length > 1 && (
+                          <button type="button" className="text-danger-500 hover:text-danger-700" onClick={() => removePaymentSplit(idx)}>
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid sm:grid-cols-[1fr_1fr_150px] gap-3">
+                        <div className="form-group">
+                          <label className="label">Forma</label>
+                          <select className="input" value={split.payment_method_id} onChange={e => setPaymentSplit(idx, 'payment_method_id', e.target.value)} required>
+                            <option value="">Selecionar...</option>
+                            {paymentMethods
+                              .filter(pm => !['gas_povo', 'vale_hub'].includes(pm.type))
+                              .map(pm => <option key={pm.id} value={pm.id}>{pm.name}</option>)}
+                          </select>
+                        </div>
+                        {splitRequiresMachine ? (
+                          <div className="form-group">
+                            <label className="label">Maquininha</label>
+                            <select className="input" value={split.card_machine_id} onChange={e => setPaymentSplit(idx, 'card_machine_id', e.target.value)} required>
+                              <option value="">Selecionar...</option>
+                              {cardMachines.map(cm => <option key={cm.id} value={cm.id}>{cm.name}</option>)}
+                            </select>
+                          </div>
+                        ) : <div className="form-group hidden sm:block" />}
+                        <div className="form-group">
+                          <label className="label">Valor</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                            <input className="input pl-8" value={split.amount} onChange={e => setPaymentSplit(idx, 'amount', maskCurrency(e.target.value.replace(/\D/g, '')))} required />
+                          </div>
+                          <button type="button" className="text-xs text-brand-700 font-semibold mt-1" onClick={() => fillSplitRemaining(idx)}>Usar restante</button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+                <button type="button" className="btn-secondary btn-sm" onClick={addPaymentSplit}>
+                  <PlusCircle className="w-3.5 h-3.5" /> Adicionar forma
+                </button>
+                <div className={`p-3 rounded-xl border text-sm ${Math.abs(splitRemaining) <= 0.01 ? 'bg-success-50 border-success-200 text-success-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                  Pago: <strong>{formatCurrency(splitPaidTotal)}</strong> · Restante: <strong>{formatCurrency(splitRemaining)}</strong>
+                </div>
+              </div>
+            )}
+
+            {isSplitPayment && (
               <div className="form-group">
-                <label className="label">Maquininha</label>
-                <select className="input" value={cardMachineId} onChange={e => setCardMachineId(e.target.value)} required>
-                  <option value="">Selecionar...</option>
-                  {cardMachines.map(cm => <option key={cm.id} value={cm.id}>{cm.name}</option>)}
+                <label className="label">Canal</label>
+                <select className="input" value={channel} onChange={e => handleChannelChange(e.target.value)}>
+                  <option value="street">Rua / entrega</option>
+                  <option value="counter">Portaria / retirada</option>
+                  <option value="delivery">Entrega</option>
+                  <option value="other">Outro</option>
                 </select>
               </div>
             )}
-            <div className="form-group">
-              <label className="label">Canal</label>
-              <select className="input" value={channel} onChange={e => handleChannelChange(e.target.value)}>
-                <option value="street">Rua / entrega</option>
-                <option value="counter">Portaria / retirada</option>
-                <option value="delivery">Entrega</option>
-                <option value="other">Outro</option>
-              </select>
-            </div>
           </div>
 
           <div className="space-y-3">
@@ -665,6 +836,7 @@ function EditSaleModal({ open, sale, products, paymentMethods, cardMachines, set
             <div className="flex justify-between text-sm"><span className="text-slate-400">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
             <div className="flex justify-between text-sm"><span className="text-slate-400">Taxa</span><span>{formatCurrency(parseCurrency(deliveryFee))}</span></div>
             <div className="flex justify-between text-sm"><span className="text-slate-400">Desconto</span><span>-{formatCurrency(parseCurrency(discount))}</span></div>
+            {isSplitPayment && <div className="flex justify-between text-sm text-emerald-300"><span>Pago no dividido</span><span>{formatCurrency(splitPaidTotal)}</span></div>}
             <div className="border-t border-slate-700 pt-2 flex justify-between text-lg font-bold"><span>Total</span><span className="text-orange-400">{formatCurrency(total)}</span></div>
           </div>
 
