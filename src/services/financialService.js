@@ -77,7 +77,7 @@ export const financialService = {
   async getRevenueByPayment(company_id, start, end) {
     const { data, error } = await supabase
       .from('sales')
-      .select('total, payment_methods(name, type)')
+      .select('total, payment_methods(name, type), sale_payments(amount, payment_methods(name, type))')
       .eq('company_id', company_id)
       .eq('status', 'completed')
       .gte('sold_at', start)
@@ -87,11 +87,15 @@ export const financialService = {
 
     const grouped = {}
     data.forEach(s => {
-      const type = s.payment_methods?.type || 'other'
-      const name = s.payment_methods?.name || 'Outro'
-      if (!grouped[type]) grouped[type] = { name, total: 0, count: 0 }
-      grouped[type].total += Number(s.total)
-      grouped[type].count++
+      const payments = s.sale_payments?.length
+        ? s.sale_payments.map(p => ({ type: p.payment_methods?.type || 'other', name: p.payment_methods?.name || 'Outro', amount: Number(p.amount || 0) }))
+        : [{ type: s.payment_methods?.type || 'other', name: s.payment_methods?.name || 'Outro', amount: Number(s.total || 0) }]
+
+      payments.forEach(payment => {
+        if (!grouped[payment.type]) grouped[payment.type] = { name: payment.name, total: 0, count: 0 }
+        grouped[payment.type].total += payment.amount
+        grouped[payment.type].count++
+      })
     })
 
     return { data: Object.values(grouped), error: null }
@@ -103,10 +107,9 @@ export const financialService = {
   async getRevenueByMachine(company_id, start, end) {
     const { data, error } = await supabase
       .from('sales')
-      .select('total, card_machines(name, color, fee_credit, fee_debit), payment_methods(type)')
+      .select('total, card_machines(name, color, fee_credit, fee_debit), payment_methods(type), sale_payments(amount, payment_methods(type), card_machines(name, color, fee_credit, fee_debit))')
       .eq('company_id', company_id)
       .eq('status', 'completed')
-      .not('card_machine_id', 'is', null)
       .gte('sold_at', start)
       .lte('sold_at', end)
 
@@ -114,23 +117,32 @@ export const financialService = {
 
     const grouped = {}
     data.forEach(s => {
-      if (!s.card_machines) return
-      const id = s.card_machines.name
-      if (!grouped[id]) grouped[id] = {
-        name: s.card_machines.name,
-        color: s.card_machines.color,
-        total: 0,
-        count: 0,
-        estimatedFee: 0,
-      }
-      const total = Number(s.total)
-      grouped[id].total += total
-      grouped[id].count++
-      // Taxa estimada
-      const fee = s.payment_methods?.type === 'credit'
-        ? s.card_machines.fee_credit
-        : s.card_machines.fee_debit
-      grouped[id].estimatedFee += total * Number(fee || 0)
+      const machinePayments = s.sale_payments?.length
+        ? s.sale_payments
+            .filter(p => p.card_machines)
+            .map(p => ({
+              machine: p.card_machines,
+              type: p.payment_methods?.type || 'other',
+              total: Number(p.amount || 0),
+            }))
+        : (s.card_machines ? [{ machine: s.card_machines, type: s.payment_methods?.type || 'other', total: Number(s.total || 0) }] : [])
+
+      machinePayments.forEach(payment => {
+        const id = payment.machine.name
+        if (!grouped[id]) grouped[id] = {
+          name: payment.machine.name,
+          color: payment.machine.color,
+          total: 0,
+          count: 0,
+          estimatedFee: 0,
+        }
+        grouped[id].total += payment.total
+        grouped[id].count++
+        const fee = payment.type === 'credit'
+          ? payment.machine.fee_credit
+          : payment.machine.fee_debit
+        grouped[id].estimatedFee += payment.total * Number(fee || 0)
+      })
     })
 
     return {
