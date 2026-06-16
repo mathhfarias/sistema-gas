@@ -16,6 +16,16 @@ function formatDateTimeInput(value) {
   return local.toISOString().slice(0, 16)
 }
 
+function getPurchaseQuantity(purchase) {
+  return (purchase?.purchase_items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+}
+
+function getUnitCostWithFreight(purchase) {
+  const quantity = getPurchaseQuantity(purchase)
+  if (!quantity) return 0
+  return Number(purchase?.total_cost || 0) / quantity
+}
+
 export default function PurchasesPage() {
   const { profile } = useAuth()
   const companyId = profile?.company_id
@@ -80,6 +90,7 @@ export default function PurchasesPage() {
                 <th>Fornecedor</th>
                 <th>Itens</th>
                 <th className="text-right">Frete</th>
+                <th className="text-right">Unit. c/ frete</th>
                 <th className="text-right">Total</th>
                 <th className="text-right">Ações</th>
               </tr>
@@ -94,6 +105,7 @@ export default function PurchasesPage() {
                     {(p.purchase_items || []).map(i => `${i.quantity}x ${i.product_name}`).join(', ')}
                   </td>
                   <td className="text-right text-xs currency text-slate-500">{formatCurrency(p.freight_cost || 0)}</td>
+                  <td className="text-right text-xs currency text-slate-700 font-medium">{formatCurrency(getUnitCostWithFreight(p))}</td>
                   <td className="text-right font-semibold currency">{formatCurrency(p.total_cost)}</td>
                   <td className="text-right">
                     <button className="btn-secondary btn-sm" onClick={() => openEditModal(p)}>
@@ -198,8 +210,11 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
     empty_returned: Number(i.quantity || 0),
   }))
   const itemsTotal = normalizedItems.reduce((s, i) => s + (i.unit_cost * i.quantity), 0)
+  const totalQuantity = normalizedItems.reduce((s, i) => s + i.quantity, 0)
   const freightTotal = parseCurrency(freightCost)
   const total = itemsTotal + freightTotal
+  const freightPerCylinder = totalQuantity > 0 ? freightTotal / totalQuantity : 0
+  const unitCostWithFreight = totalQuantity > 0 ? total / totalQuantity : 0
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -337,8 +352,16 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
             <span className="currency">{formatCurrency(freightTotal)}</span>
           </div>
           <div className="flex justify-between items-center text-sm text-slate-600">
+            <span>Frete unitário</span>
+            <span className="currency">{formatCurrency(freightPerCylinder)}</span>
+          </div>
+          <div className="flex justify-between items-center text-sm text-slate-600">
+            <span>Valor unitário com frete</span>
+            <span className="currency font-semibold text-slate-800">{formatCurrency(unitCostWithFreight)}</span>
+          </div>
+          <div className="flex justify-between items-center text-sm text-slate-600">
             <span>Vazios que serão baixados</span>
-            <span>{normalizedItems.reduce((s, i) => s + i.quantity, 0)}</span>
+            <span>{totalQuantity}</span>
           </div>
           <div className="border-t border-slate-200 pt-2 flex justify-between items-center">
             <span className="text-sm text-slate-600 font-medium">Total da compra</span>
