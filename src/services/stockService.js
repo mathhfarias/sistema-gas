@@ -255,6 +255,90 @@ export const stockService = {
     return { data: { id: purchase_id }, error: null }
   },
 
+
+  /**
+   * Exclui uma chegada de gás de forma segura.
+   *
+   * A exclusão é lógica: a chegada fica marcada como excluída e deixa de aparecer na tela.
+   * O estoque é revertido com base nos itens da chegada:
+   * - remove os cheios que tinham entrado;
+   * - devolve os vazios que tinham sido baixados.
+   */
+  async deletePurchase({ purchase_id, company_id, performed_by, reason }) {
+    if (!purchase_id) {
+      return { error: { message: 'Chegada não informada.' } }
+    }
+
+    const { data: purchase, error: purchaseError } = await supabase
+      .from('purchases')
+      .select('id, purchase_number, is_deleted')
+      .eq('id', purchase_id)
+      .eq('company_id', company_id)
+      .single()
+
+    if (purchaseError) return { error: purchaseError }
+
+    if (purchase?.is_deleted) {
+      return { error: { message: 'Essa chegada já está excluída.' } }
+    }
+
+    const { data: oldItems, error: itemsError } = await supabase
+      .from('purchase_items')
+      .select('product_id, quantity')
+      .eq('purchase_id', purchase_id)
+
+    if (itemsError) return { error: itemsError }
+
+    const byProduct = new Map()
+    for (const item of oldItems || []) {
+      if (!item.product_id) continue
+      const quantity = normalizeQuantity(item.quantity)
+      if (quantity <= 0) continue
+      byProduct.set(item.product_id, (byProduct.get(item.product_id) || 0) + quantity)
+    }
+
+    const now = new Date().toISOString()
+    const finalReason = reason?.trim() || `Exclusão da chegada #${purchase?.purchase_number || ''}`
+
+    const movements = [...byProduct.entries()].map(([product_id, quantity]) => ({
+      company_id,
+      product_id,
+      type: 'adjustment',
+      full_qty_change: -quantity,
+      empty_qty_change: quantity,
+      exchange_qty_change: 0,
+      hub_pending_qty_change: 0,
+      reference_id: purchase_id,
+      reference_type: 'purchase_delete',
+      reason: `${finalReason}. Reversão de estoque da chegada excluída.`,
+      performed_by,
+      created_at: now,
+    }))
+
+    if (movements.length) {
+      const { error: movementError } = await supabase
+        .from('stock_movements')
+        .insert(movements)
+
+      if (movementError) return { error: movementError }
+    }
+
+    const { error: updateError } = await supabase
+      .from('purchases')
+      .update({
+        is_deleted: true,
+        deleted_at: now,
+        deleted_by: performed_by,
+        updated_at: now,
+      })
+      .eq('id', purchase_id)
+      .eq('company_id', company_id)
+
+    if (updateError) return { error: updateError }
+
+    return { data: { id: purchase_id }, error: null }
+  },
+
   /**
    * Ajuste manual de estoque.
    */
