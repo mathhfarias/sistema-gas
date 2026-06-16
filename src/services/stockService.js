@@ -145,44 +145,27 @@ export const stockService = {
     const normalizedFreightCost = Number(freight_cost || 0)
     const total_cost = items_cost + normalizedFreightCost
 
-    const { data: oldMovements, error: movementsError } = await supabase
-      .from('stock_movements')
-      .select('product_id, full_qty_change, empty_qty_change, exchange_qty_change, hub_pending_qty_change')
-      .eq('company_id', company_id)
-      .eq('reference_id', purchase_id)
-      .eq('reference_type', 'purchase')
+    // Importante: para editar uma chegada, o estoque deve mudar apenas quando
+    // produto ou quantidade mudarem. Alterações de valor unitário, frete,
+    // fornecedor, data ou observação NÃO podem criar movimentação de estoque.
+    // Por isso usamos os itens gravados na chegada como base de comparação,
+    // e não o histórico de stock_movements, que pode ter sido registrado em
+    // versões antigas com regras diferentes.
+    const { data: oldItems, error: oldItemsError } = await supabase
+      .from('purchase_items')
+      .select('product_id, quantity')
+      .eq('purchase_id', purchase_id)
 
-    if (movementsError) return { error: movementsError }
+    if (oldItemsError) return { error: oldItemsError }
 
     const currentByProduct = new Map()
-    for (const movement of oldMovements || []) {
-      const key = movement.product_id
+    for (const item of oldItems || []) {
+      const key = item.product_id
+      const quantity = normalizeQuantity(item.quantity)
       const current = currentByProduct.get(key) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-      current.full += normalizeQuantity(movement.full_qty_change)
-      current.empty += normalizeQuantity(movement.empty_qty_change)
-      current.exchange += normalizeQuantity(movement.exchange_qty_change)
-      current.hub += normalizeQuantity(movement.hub_pending_qty_change)
+      current.full += quantity
+      current.empty -= quantity
       currentByProduct.set(key, current)
-    }
-
-    // Fallback para chegadas antigas que não tinham stock_movements com reference_id.
-    if (!currentByProduct.size) {
-      const { data: oldItems, error: oldItemsError } = await supabase
-        .from('purchase_items')
-        .select('product_id, quantity, empty_returned')
-        .eq('purchase_id', purchase_id)
-
-      if (oldItemsError) return { error: oldItemsError }
-
-      for (const item of oldItems || []) {
-        const key = item.product_id
-        const quantity = normalizeQuantity(item.quantity)
-        const emptyReturned = normalizeQuantity(item.empty_returned)
-        const current = currentByProduct.get(key) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-        current.full += quantity
-        current.empty -= emptyReturned
-        currentByProduct.set(key, current)
-      }
     }
 
     const desiredByProduct = new Map()
@@ -222,7 +205,7 @@ export const stockService = {
           hub_pending_qty_change: hubDiff,
           reference_id: purchase_id,
           reference_type: 'purchase_edit',
-          reason: 'Ajuste automático por alteração da chegada de gás',
+          reason: 'Ajuste automático por alteração de quantidade/produto da chegada de gás',
           performed_by: created_by,
         })
 
