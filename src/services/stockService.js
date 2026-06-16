@@ -145,44 +145,27 @@ export const stockService = {
     const normalizedFreightCost = Number(freight_cost || 0)
     const total_cost = items_cost + normalizedFreightCost
 
-    const { data: oldMovements, error: movementsError } = await supabase
-      .from('stock_movements')
-      .select('product_id, full_qty_change, empty_qty_change, exchange_qty_change, hub_pending_qty_change')
-      .eq('company_id', company_id)
-      .eq('reference_id', purchase_id)
-      .eq('reference_type', 'purchase')
+    // Importante: para editar uma chegada, o estoque deve mudar apenas quando
+    // produto ou quantidade mudarem. Alterações de valor unitário, frete,
+    // fornecedor, data ou observação NÃO podem criar movimentação de estoque.
+    // Por isso usamos os itens gravados na chegada como base de comparação,
+    // e não o histórico de stock_movements, que pode ter sido registrado em
+    // versões antigas com regras diferentes.
+    const { data: oldItems, error: oldItemsError } = await supabase
+      .from('purchase_items')
+      .select('product_id, quantity')
+      .eq('purchase_id', purchase_id)
 
-    if (movementsError) return { error: movementsError }
+    if (oldItemsError) return { error: oldItemsError }
 
     const currentByProduct = new Map()
-    for (const movement of oldMovements || []) {
-      const key = movement.product_id
+    for (const item of oldItems || []) {
+      const key = item.product_id
+      const quantity = normalizeQuantity(item.quantity)
       const current = currentByProduct.get(key) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-      current.full += normalizeQuantity(movement.full_qty_change)
-      current.empty += normalizeQuantity(movement.empty_qty_change)
-      current.exchange += normalizeQuantity(movement.exchange_qty_change)
-      current.hub += normalizeQuantity(movement.hub_pending_qty_change)
+      current.full += quantity
+      current.empty -= quantity
       currentByProduct.set(key, current)
-    }
-
-    // Fallback para chegadas antigas que não tinham stock_movements com reference_id.
-    if (!currentByProduct.size) {
-      const { data: oldItems, error: oldItemsError } = await supabase
-        .from('purchase_items')
-        .select('product_id, quantity, empty_returned')
-        .eq('purchase_id', purchase_id)
-
-      if (oldItemsError) return { error: oldItemsError }
-
-      for (const item of oldItems || []) {
-        const key = item.product_id
-        const quantity = normalizeQuantity(item.quantity)
-        const emptyReturned = normalizeQuantity(item.empty_returned)
-        const current = currentByProduct.get(key) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-        current.full += quantity
-        current.empty -= emptyReturned
-        currentByProduct.set(key, current)
-      }
     }
 
     const desiredByProduct = new Map()
@@ -222,7 +205,7 @@ export const stockService = {
           hub_pending_qty_change: hubDiff,
           reference_id: purchase_id,
           reference_type: 'purchase_edit',
-          reason: 'Ajuste automático por alteração da chegada de gás',
+          reason: 'Ajuste automático por alteração de quantidade/produto da chegada de gás',
           performed_by: created_by,
         })
 
@@ -268,6 +251,90 @@ export const stockService = {
       .insert(purchaseItems)
 
     if (itemsError) return { error: itemsError }
+
+    return { data: { id: purchase_id }, error: null }
+  },
+
+
+  /**
+   * Exclui uma chegada de gás de forma segura.
+   *
+   * A exclusão é lógica: a chegada fica marcada como excluída e deixa de aparecer na tela.
+   * O estoque é revertido com base nos itens da chegada:
+   * - remove os cheios que tinham entrado;
+   * - devolve os vazios que tinham sido baixados.
+   */
+  async deletePurchase({ purchase_id, company_id, performed_by, reason }) {
+    if (!purchase_id) {
+      return { error: { message: 'Chegada não informada.' } }
+    }
+
+    const { data: purchase, error: purchaseError } = await supabase
+      .from('purchases')
+      .select('id, purchase_number, is_deleted')
+      .eq('id', purchase_id)
+      .eq('company_id', company_id)
+      .single()
+
+    if (purchaseError) return { error: purchaseError }
+
+    if (purchase?.is_deleted) {
+      return { error: { message: 'Essa chegada já está excluída.' } }
+    }
+
+    const { data: oldItems, error: itemsError } = await supabase
+      .from('purchase_items')
+      .select('product_id, quantity')
+      .eq('purchase_id', purchase_id)
+
+    if (itemsError) return { error: itemsError }
+
+    const byProduct = new Map()
+    for (const item of oldItems || []) {
+      if (!item.product_id) continue
+      const quantity = normalizeQuantity(item.quantity)
+      if (quantity <= 0) continue
+      byProduct.set(item.product_id, (byProduct.get(item.product_id) || 0) + quantity)
+    }
+
+    const now = new Date().toISOString()
+    const finalReason = reason?.trim() || `Exclusão da chegada #${purchase?.purchase_number || ''}`
+
+    const movements = [...byProduct.entries()].map(([product_id, quantity]) => ({
+      company_id,
+      product_id,
+      type: 'adjustment',
+      full_qty_change: -quantity,
+      empty_qty_change: quantity,
+      exchange_qty_change: 0,
+      hub_pending_qty_change: 0,
+      reference_id: purchase_id,
+      reference_type: 'purchase_delete',
+      reason: `${finalReason}. Reversão de estoque da chegada excluída.`,
+      performed_by,
+      created_at: now,
+    }))
+
+    if (movements.length) {
+      const { error: movementError } = await supabase
+        .from('stock_movements')
+        .insert(movements)
+
+      if (movementError) return { error: movementError }
+    }
+
+    const { error: updateError } = await supabase
+      .from('purchases')
+      .update({
+        is_deleted: true,
+        deleted_at: now,
+        deleted_by: performed_by,
+        updated_at: now,
+      })
+      .eq('id', purchase_id)
+      .eq('company_id', company_id)
+
+    if (updateError) return { error: updateError }
 
     return { data: { id: purchase_id }, error: null }
   },
