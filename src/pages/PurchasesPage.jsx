@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Truck, Pencil } from 'lucide-react'
+import { Plus, Truck, Pencil, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -37,6 +37,7 @@ export default function PurchasesPage() {
       .from('purchases')
       .select('*, purchase_items(id, product_id, product_name, quantity, unit_cost, total_cost, empty_returned)')
       .eq('company_id', companyId)
+      .or('is_deleted.is.null,is_deleted.eq.false')
       .order('purchased_at', { ascending: false })
       .limit(50),
     [companyId]
@@ -55,6 +56,29 @@ export default function PurchasesPage() {
   function closeModal() {
     setShowModal(false)
     setEditingPurchase(null)
+  }
+
+  async function handleDeletePurchase(purchase) {
+    const confirmed = window.confirm(
+      `Excluir a chegada #${purchase.purchase_number || ''}?\n\nEssa ação vai ocultar a chegada da tela e reverter o estoque: diminui os cheios recebidos e devolve os vazios baixados.`
+    )
+
+    if (!confirmed) return
+
+    const { error } = await stockService.deletePurchase({
+      purchase_id: purchase.id,
+      company_id: companyId,
+      performed_by: profile?.id,
+      reason: `Exclusão da chegada #${purchase.purchase_number || ''}`,
+    })
+
+    if (error) {
+      toast.error(error.message || 'Erro ao excluir chegada')
+      return
+    }
+
+    toast.success('Chegada excluída e estoque revertido!')
+    refetch()
   }
 
   if (loading) return <PageLoader />
@@ -108,9 +132,14 @@ export default function PurchasesPage() {
                   <td className="text-right text-xs currency text-slate-700 font-medium">{formatCurrency(getUnitCostWithFreight(p))}</td>
                   <td className="text-right font-semibold currency">{formatCurrency(p.total_cost)}</td>
                   <td className="text-right">
-                    <button className="btn-secondary btn-sm" onClick={() => openEditModal(p)}>
-                      <Pencil className="w-3.5 h-3.5" /> Alterar
-                    </button>
+                    <div className="flex justify-end gap-2">
+                      <button className="btn-secondary btn-sm" onClick={() => openEditModal(p)}>
+                        <Pencil className="w-3.5 h-3.5" /> Alterar
+                      </button>
+                      <button className="btn-danger btn-sm" onClick={() => handleDeletePurchase(p)}>
+                        <Trash2 className="w-3.5 h-3.5" /> Excluir
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -128,7 +157,7 @@ export default function PurchasesPage() {
         onSuccess={() => {
           closeModal()
           refetch()
-          toast.success(editingPurchase ? 'Chegada alterada! Estoque recalculado.' : 'Chegada registrada! Estoque atualizado.')
+          toast.success(editingPurchase ? 'Chegada alterada!' : 'Chegada registrada! Estoque atualizado.')
         }}
       />
     </div>
