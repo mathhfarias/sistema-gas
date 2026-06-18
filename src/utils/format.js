@@ -26,11 +26,26 @@ export function parseCurrency(str) {
   return parseFloat(cleaned) || 0
 }
 
+function parseDateValue(date) {
+  if (!date) return null
+  if (date instanceof Date) return date
+
+  const value = String(date)
+
+  // Datas vindas do banco como YYYY-MM-DD não devem ser interpretadas em UTC,
+  // pois isso pode voltar um dia no fuso do Brasil e mostrar 11/05 em vez de 12/05.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  return new Date(value)
+}
+
 // Formatar data para pt-BR
 export function formatDate(date, options = {}) {
-  if (!date) return '—'
-  const d = typeof date === 'string' ? new Date(date) : date
-  if (isNaN(d)) return '—'
+  const d = parseDateValue(date)
+  if (!d || isNaN(d)) return '—'
   return d.toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: '2-digit',
