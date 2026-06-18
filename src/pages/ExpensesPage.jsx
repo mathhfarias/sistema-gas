@@ -124,16 +124,24 @@ export default function ExpensesPage() {
   if (loading) return <PageLoader />
 
   const list = expenses || []
+  const periodList = list.filter(e => matchesDateFilter(e.due_date, dateFilter))
+  const overdueOutsidePeriod = list.filter(e =>
+    e.status === 'overdue' && !matchesDateFilter(e.due_date, dateFilter)
+  )
+  const overdueOutsideIds = new Set(overdueOutsidePeriod.map(e => e.id))
   const dateFilteredList = showAllMonths
     ? list
-    : list.filter(e => matchesDateFilter(e.due_date, dateFilter))
+    : [...periodList, ...overdueOutsidePeriod].filter((item, index, arr) =>
+        arr.findIndex(exp => exp.id === item.id) === index
+      )
 
   const filtered = filter === 'all' ? dateFilteredList : dateFilteredList.filter(e => e.status === filter)
   const groupedExpenses = groupExpensesByDate(filtered)
 
   const totalPending = dateFilteredList.filter(e => ['pending','overdue'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0)
-  const totalPaid = dateFilteredList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
+  const totalPaid = periodList.filter(e => e.status === 'paid').reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
   const overdue = dateFilteredList.filter(e => e.status === 'overdue')
+  const overdueOutsideTotal = overdueOutsidePeriod.reduce((s, e) => s + Number(e.amount), 0)
 
   async function markAsPaid(exp) {
     const { error } = await supabase
@@ -205,6 +213,30 @@ export default function ExpensesPage() {
           <p className="text-2xl font-display font-bold text-danger-700 mt-1">{overdue.length}</p>
         </div>
       </div>
+
+      {!showAllMonths && overdueOutsidePeriod.length > 0 && (
+        <div className="rounded-2xl border border-danger-200 bg-danger-50 p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-danger-100 text-danger-600 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-display font-semibold text-danger-800">
+                Existem {overdueOutsidePeriod.length} despesa(s) atrasada(s) fora de {getDateFilterLabel(dateFilter, false)}
+              </p>
+              <p className="text-sm text-danger-700 mt-0.5">
+                Total em atraso de meses anteriores: {formatCurrency(overdueOutsideTotal)}. Elas foram incluídas automaticamente nesta tela para não passarem despercebidas.
+              </p>
+            </div>
+          </div>
+          <button
+            className="btn-danger btn-sm shrink-0"
+            onClick={() => setFilter('overdue')}
+          >
+            Ver atrasadas
+          </button>
+        </div>
+      )}
 
       <div className="card">
         <div className="flex flex-col lg:flex-row lg:items-end gap-3">
@@ -283,6 +315,7 @@ export default function ExpensesPage() {
                   <ExpenseTimelineCard
                     key={exp.id}
                     exp={exp}
+                    isOutsidePeriod={overdueOutsideIds.has(exp.id) && !showAllMonths}
                     onEdit={() => openEdit(exp)}
                     onPaid={() => markAsPaid(exp)}
                     onDelete={() => deleteExpense(exp)}
@@ -308,7 +341,7 @@ export default function ExpensesPage() {
   )
 }
 
-function ExpenseTimelineCard({ exp, onEdit, onPaid, onDelete }) {
+function ExpenseTimelineCard({ exp, isOutsidePeriod = false, onEdit, onPaid, onDelete }) {
   const isOverdue = exp.status === 'overdue'
   const isPending = exp.status === 'pending'
   const isPaid = exp.status === 'paid'
@@ -336,7 +369,8 @@ function ExpenseTimelineCard({ exp, onEdit, onPaid, onDelete }) {
           <span className="text-xs font-medium text-orange-700">{categoryLabel}</span>
         </div>
         <p className="text-sm text-slate-500 mt-1">
-          Despesa cadastrada na seção Despesas
+          Vencimento: {formatExpenseDay(exp.due_date)}
+          {isOutsidePeriod ? ' · Atrasada de mês anterior' : ''}
           {exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
           {recurrence ? ` · ${recurrence}` : ''}
           {exp.notes ? ` · ${exp.notes}` : ''}
