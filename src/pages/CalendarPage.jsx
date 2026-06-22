@@ -346,14 +346,14 @@ export default function CalendarPage() {
       <div className="card">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <button className="btn-outline btn-sm" onClick={goToPreviousMonth} title="Mês anterior">
+            <button className="btn-outline btn-sm" onClick={goToPreviousMonth} title="Mês anterior" aria-label="Mês anterior">
               <ChevronLeft className="w-4 h-4" />
             </button>
             <div>
               <h2 className="font-display font-bold text-xl text-slate-900">{monthName} de {filter.year}</h2>
               <p className="text-xs text-slate-500">Clique em uma data para visualizar os detalhes do dia.</p>
             </div>
-            <button className="btn-outline btn-sm" onClick={goToNextMonth} title="Próximo mês">
+            <button className="btn-outline btn-sm" onClick={goToNextMonth} title="Próximo mês" aria-label="Próximo mês">
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
@@ -515,11 +515,11 @@ function CalendarEventRow({ event, onDone, onDelete }) {
         {isManual && (
           <div className="flex gap-1 justify-end">
             {!isDone && (
-              <button className="btn-outline btn-sm" onClick={onDone} title="Concluir">
+              <button className="btn-outline btn-sm" onClick={onDone} title="Concluir" aria-label="Concluir evento">
                 <CheckCircle className="w-3.5 h-3.5" />
               </button>
             )}
-            <button className="btn-outline btn-sm text-danger-600 hover:text-danger-700" onClick={onDelete} title="Excluir">
+            <button className="btn-outline btn-sm text-danger-600 hover:text-danger-700" onClick={onDelete} title="Excluir" aria-label="Excluir evento">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>

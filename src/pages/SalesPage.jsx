@@ -290,10 +290,10 @@ export function SalesPage() {
                   <td>
                     {s.status === 'completed' && (
                       <div className="flex gap-1.5 justify-end">
-                        <button className="btn-sm btn-outline" title="Alterar venda" onClick={() => setEditingSale(s)}>
+                        <button className="btn-sm btn-outline" title="Alterar venda" aria-label="Alterar venda" onClick={() => setEditingSale(s)}>
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button className="btn-sm btn-outline text-danger-600 hover:bg-danger-50" title="Cancelar venda" onClick={() => handleCancel(s.id)}>
+                        <button className="btn-sm btn-outline text-danger-600 hover:bg-danger-50" title="Cancelar venda" aria-label="Cancelar venda" onClick={() => handleCancel(s.id)}>
                           <XCircle className="w-3.5 h-3.5" />
                         </button>
                       </div>

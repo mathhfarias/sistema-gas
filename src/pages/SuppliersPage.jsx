@@ -60,9 +60,9 @@ export default function SuppliersPage() {
                   <td>{s.contact_name || '—'}</td>
                   <td>
                     <div className="flex gap-1.5">
-                      <button className="btn-outline btn-sm" onClick={() => setViewing(s)}><Eye className="w-3.5 h-3.5" /></button>
+                      <button className="btn-outline btn-sm" onClick={() => setViewing(s)} aria-label={`Visualizar fornecedor ${s.name || ''}`}><Eye className="w-3.5 h-3.5" /></button>
                       <button className="btn-outline btn-sm" onClick={() => { setEditing(s); setShowModal(true) }}>Editar</button>
-                      <button className="btn-danger btn-sm" onClick={() => deleteSupplier(s)}><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button className="btn-danger btn-sm" onClick={() => deleteSupplier(s)} aria-label={`Excluir fornecedor ${s.name || ''}`}><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
