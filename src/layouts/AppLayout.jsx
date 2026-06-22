@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   { to: '/vendas/nova', icon: PlusCircle, label: 'Nova Venda', highlight: true },
   { to: '/vendas', icon: ShoppingCart, label: 'Vendas' },
   { to: '/estoque', icon: Box, label: 'Estoque' },
-  { to: '/compras', icon: Truck, label: 'Chegada de Gás' },
+  { to: '/chegada-gas', icon: Truck, label: 'Chegada de Gás' },
   { to: '/clientes', icon: Users, label: 'Clientes' },
   { to: '/fornecedores', icon: Building2, label: 'Fornecedores' },
   { to: '/produtos', icon: Package, label: 'Produtos' },
@@ -59,6 +59,7 @@ export default function AppLayout() {
           <button
             className="ml-auto lg:hidden text-slate-400 hover:text-slate-600"
             onClick={() => setSidebarOpen(false)}
+            aria-label="Fechar menu lateral"
           >
             <X className="w-5 h-5" />
           </button>
@@ -101,6 +102,7 @@ export default function AppLayout() {
               onClick={handleSignOut}
               className="text-slate-400 hover:text-danger-600 transition-colors"
               title="Sair"
+              aria-label="Sair do sistema"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -115,6 +117,7 @@ export default function AppLayout() {
           <button
             className="text-slate-500 hover:text-slate-700"
             onClick={() => setSidebarOpen(true)}
+            aria-label="Abrir menu lateral"
           >
             <Menu className="w-5 h-5" />
           </button>

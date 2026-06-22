@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import AppLayout from './layouts/AppLayout'
 import LoginPage from './pages/LoginPage'
@@ -34,6 +34,22 @@ function FullScreenLoader() {
   )
 }
 
+function NotFoundPage() {
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <div className="card max-w-md text-center">
+        <h1 className="font-display text-xl font-bold text-slate-900">Página não encontrada</h1>
+        <p className="text-sm text-slate-500 mt-2">
+          A rota acessada não existe ou foi alterada. Use o menu lateral para continuar.
+        </p>
+        <Link to="/dashboard" className="btn-primary mt-4 inline-flex">
+          Voltar ao Dashboard
+        </Link>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -50,7 +66,8 @@ export default function App() {
             <Route path="vendas" element={<SalesPage />} />
             <Route path="vendas/nova" element={<NewSalePage />} />
             <Route path="estoque" element={<StockPage />} />
-            <Route path="compras" element={<PurchasesPage />} />
+            <Route path="chegada-gas" element={<PurchasesPage />} />
+            <Route path="compras" element={<Navigate to="/chegada-gas" replace />} />
             <Route path="clientes" element={<CustomersPage />} />
             <Route path="fornecedores" element={<SuppliersPage />} />
             <Route path="despesas" element={<ExpensesPage />} />
@@ -59,8 +76,13 @@ export default function App() {
             <Route path="veiculos" element={<VehiclesPage />} />
             <Route path="calendario" element={<CalendarPage />} />
             <Route path="configuracoes" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={
+            <PrivateRoute>
+              <NotFoundPage />
+            </PrivateRoute>
+          } />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

@@ -7,42 +7,68 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  const profileLoadedRef = useRef(false)
+
+  const profileLoadedForRef = useRef(null)
+  const currentUserIdRef = useRef(null)
+  const lastAuthSignatureRef = useRef(null)
+  const mountedRef = useRef(false)
 
   useEffect(() => {
-    // Busca sessão atual uma única vez
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUser(session.user)
-        fetchProfile(session.user.id)
-      } else {
-        setLoading(false)
+    mountedRef.current = true
+    let cancelled = false
+
+    async function handleSession(session, event = 'SESSION') {
+      if (cancelled) return
+
+      const nextUser = session?.user || null
+      const signature = `${event}:${nextUser?.id || 'anonymous'}`
+
+      if (signature === lastAuthSignatureRef.current && event !== 'SIGNED_OUT') {
+        return
       }
-    })
+      lastAuthSignatureRef.current = signature
 
-    // Listener apenas para SIGNED_IN e SIGNED_OUT — ignora eventos duplicados
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('[Auth] evento:', event)
-
-      if (event === 'SIGNED_OUT') {
-        profileLoadedRef.current = false
+      if (!nextUser) {
+        currentUserIdRef.current = null
+        profileLoadedForRef.current = null
         setUser(null)
         setProfile(null)
         setLoading(false)
+        return
       }
 
-      if (event === 'SIGNED_IN' && session?.user && !profileLoadedRef.current) {
-        setUser(session.user)
-        fetchProfile(session.user.id)
-      }
+      currentUserIdRef.current = nextUser.id
+      setUser(nextUser)
+      await fetchProfile(nextUser.id)
+    }
+
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => handleSession(session, 'INITIAL_SESSION'))
+      .catch((err) => {
+        console.error('[Auth] Erro ao buscar sessão:', err?.message || err)
+        if (!cancelled) setLoading(false)
+      })
+
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return
+      handleSession(session, event)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      cancelled = true
+      mountedRef.current = false
+      data?.subscription?.unsubscribe?.()
+    }
   }, [])
 
   async function fetchProfile(userId) {
-    if (profileLoadedRef.current) return
-    profileLoadedRef.current = true
+    if (!userId) return
+    if (profileLoadedForRef.current === userId) {
+      if (mountedRef.current) setLoading(false)
+      return
+    }
+
+    profileLoadedForRef.current = userId
 
     try {
       const { data, error } = await supabase
@@ -51,28 +77,37 @@ export function AuthProvider({ children }) {
         .eq('id', userId)
         .single()
 
+      if (!mountedRef.current || currentUserIdRef.current !== userId) return
+
       if (error) {
         console.error('[Auth] Erro ao buscar profile:', error.message)
         setProfile(null)
       } else {
-        console.log('[Auth] Profile OK:', data?.full_name, '| role:', data?.role)
         setProfile(data)
       }
     } catch (err) {
-      console.error('[Auth] Erro inesperado:', err)
-      setProfile(null)
+      if (mountedRef.current && currentUserIdRef.current === userId) {
+        console.error('[Auth] Erro inesperado:', err)
+        setProfile(null)
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current && currentUserIdRef.current === userId) {
+        setLoading(false)
+      }
     }
   }
 
   async function signIn(email, password) {
-    profileLoadedRef.current = false // reseta ao fazer novo login
+    profileLoadedForRef.current = null
+    lastAuthSignatureRef.current = null
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     return { error }
   }
 
   async function signOut() {
+    profileLoadedForRef.current = null
+    lastAuthSignatureRef.current = null
+    currentUserIdRef.current = null
     await supabase.auth.signOut()
   }
 

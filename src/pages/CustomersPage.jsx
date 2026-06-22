@@ -147,9 +147,9 @@ export default function CustomersPage() {
                   <td className="text-sm font-mono">{c.cpf_cnpj || '—'}</td>
                   <td>
                     <div className="flex gap-1.5">
-                      <button className="btn-outline btn-sm" onClick={() => setViewing(c)}><Eye className="w-3.5 h-3.5" /></button>
+                      <button className="btn-outline btn-sm" onClick={() => setViewing(c)} aria-label={`Visualizar cliente ${c.name || ''}`}><Eye className="w-3.5 h-3.5" /></button>
                       <button className="btn-outline btn-sm" onClick={() => { setEditing(c); setShowModal(true) }}>Editar</button>
-                      <button className="btn-danger btn-sm" onClick={() => deleteCustomer(c)}><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button className="btn-danger btn-sm" onClick={() => deleteCustomer(c)} aria-label={`Excluir cliente ${c.name || ''}`}><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
