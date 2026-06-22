@@ -84,6 +84,7 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-lg' })
           <button
             onClick={onClose}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            aria-label="Fechar janela"
           >
             <X className="w-4 h-4" />
           </button>
