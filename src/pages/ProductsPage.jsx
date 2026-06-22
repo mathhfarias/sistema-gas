@@ -93,7 +93,7 @@ export default function ProductsPage() {
                     <td>
                       <div className="flex gap-1.5">
                         <button className="btn-outline btn-sm" onClick={() => { setEditing(p); setShowModal(true) }}>Editar valor</button>
-                        <button className="btn-danger btn-sm" onClick={() => deleteProduct(p)}><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button className="btn-danger btn-sm" onClick={() => deleteProduct(p)} aria-label={`Excluir produto ${p.name || ''}`}><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>

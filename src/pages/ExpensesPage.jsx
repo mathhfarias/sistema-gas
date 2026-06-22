@@ -388,7 +388,7 @@ function ExpenseTimelineCard({ exp, isOutsidePeriod = false, onEdit, onPaid, onD
               <CheckCircle className="w-3.5 h-3.5" /> Pagar
             </button>
           ) : null}
-          <button className="btn-danger btn-sm" onClick={onDelete} title="Excluir">
+          <button className="btn-danger btn-sm" onClick={onDelete} title="Excluir" aria-label="Excluir despesa">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
