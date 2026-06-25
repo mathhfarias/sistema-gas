@@ -6,27 +6,30 @@ import {
   PlusCircle, Box, ChevronRight, Car, CalendarDays,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { can, roleLabel } from '../utils/permissions'
 
 const NAV_ITEMS = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/vendas/nova', icon: PlusCircle, label: 'Nova Venda', highlight: true },
-  { to: '/vendas', icon: ShoppingCart, label: 'Vendas' },
-  { to: '/estoque', icon: Box, label: 'Estoque' },
-  { to: '/chegada-gas', icon: Truck, label: 'Chegada de Gás' },
-  { to: '/clientes', icon: Users, label: 'Clientes' },
-  { to: '/fornecedores', icon: Building2, label: 'Fornecedores' },
-  { to: '/produtos', icon: Package, label: 'Produtos' },
-  { to: '/veiculos', icon: Car, label: 'Veículos' },
-  { to: '/calendario', icon: CalendarDays, label: 'Calendário' },
-  { to: '/despesas', icon: Receipt, label: 'Despesas' },
-  { to: '/relatorios', icon: BarChart3, label: 'Relatórios' },
-  { to: '/configuracoes', icon: Settings, label: 'Configurações' },
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'dashboard' },
+  { to: '/vendas/nova', icon: PlusCircle, label: 'Nova Venda', highlight: true, permission: 'newSale' },
+  { to: '/vendas', icon: ShoppingCart, label: 'Vendas', permission: 'sales' },
+  { to: '/estoque', icon: Box, label: 'Estoque', permission: 'stock' },
+  { to: '/chegada-gas', icon: Truck, label: 'Chegada de Gás', permission: 'purchases' },
+  { to: '/clientes', icon: Users, label: 'Clientes', permission: 'customers' },
+  { to: '/fornecedores', icon: Building2, label: 'Fornecedores', permission: 'suppliers' },
+  { to: '/produtos', icon: Package, label: 'Produtos', permission: 'products' },
+  { to: '/veiculos', icon: Car, label: 'Veículos', permission: 'vehicles' },
+  { to: '/calendario', icon: CalendarDays, label: 'Calendário', permission: 'calendar' },
+  { to: '/despesas', icon: Receipt, label: 'Despesas', permission: 'expenses' },
+  { to: '/relatorios', icon: BarChart3, label: 'Relatórios', permission: 'reports' },
+  { to: '/configuracoes', icon: Settings, label: 'Configurações', permission: 'settings' },
 ]
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
+  const role = profile?.role || 'operator'
+  const visibleNavItems = NAV_ITEMS.filter(item => can(role, item.permission))
 
   async function handleSignOut() {
     await signOut()
@@ -67,7 +70,7 @@ export default function AppLayout() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
-          {NAV_ITEMS.map(({ to, icon: Icon, label, highlight }) => (
+          {visibleNavItems.map(({ to, icon: Icon, label, highlight }) => (
             <NavLink
               key={to}
               to={to}
@@ -96,7 +99,7 @@ export default function AppLayout() {
               <p className="text-sm font-medium text-slate-800 truncate">
                 {profile?.full_name || 'Usuário'}
               </p>
-              <p className="text-xs text-slate-500 capitalize">{profile?.role || 'operator'}</p>
+              <p className="text-xs text-slate-500">{roleLabel(profile?.role)}</p>
             </div>
             <button
               onClick={handleSignOut}
