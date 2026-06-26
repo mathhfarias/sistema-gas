@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   dashboard: ['admin', 'manager', 'operator', 'viewer'],
   newSale: ['admin', 'manager', 'operator'],
   sales: ['admin', 'manager', 'operator', 'viewer'],
+  dailyReview: ['admin', 'manager', 'operator'],
   stock: ['admin', 'manager', 'operator', 'viewer'],
   purchases: ['admin', 'manager'],
   customers: ['admin', 'manager', 'operator'],
@@ -35,6 +36,7 @@ export const PERMISSIONS = {
   settings: ['admin'],
   manageUsers: ['admin'],
   audit: ['admin', 'manager'],
+  cancelSaleReview: ['admin', 'manager'],
 }
 
 export function can(role, permission) {

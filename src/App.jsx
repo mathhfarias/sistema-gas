@@ -4,6 +4,7 @@ import AppLayout from './layouts/AppLayout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import SalesPage from './pages/SalesPage'
+import DailyReviewPage from './pages/DailyReviewPage'
 import NewSalePage from './pages/NewSalePage'
 import StockPage from './pages/StockPage'
 import PurchasesPage from './pages/PurchasesPage'
@@ -91,6 +92,7 @@ export default function App() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="vendas" element={<PermissionRoute permission="sales"><SalesPage /></PermissionRoute>} />
+            <Route path="conferencia-dia" element={<PermissionRoute permission="dailyReview"><DailyReviewPage /></PermissionRoute>} />
             <Route path="vendas/nova" element={<PermissionRoute permission="newSale"><NewSalePage /></PermissionRoute>} />
             <Route path="estoque" element={<PermissionRoute permission="stock"><StockPage /></PermissionRoute>} />
             <Route path="chegada-gas" element={<PermissionRoute permission="purchases"><PurchasesPage /></PermissionRoute>} />
