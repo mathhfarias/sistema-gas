@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import {
   Building2, ShieldCheck, Users, Package, CreditCard, History,
-  Save, SlidersHorizontal, AlertTriangle, CheckCircle2,
+  Save, SlidersHorizontal, AlertTriangle, CheckCircle2, ClipboardCheck, Clock,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -20,6 +20,15 @@ const DEFAULT_EXTRA = {
   arrival_subtracts_empty: true,
   exchange_out_subtracts_full: true,
   allow_negative_stock: false,
+  daily_sales_review: {
+    enabled: true,
+    time: '19:20',
+    repeat_enabled: true,
+    repeat_interval_minutes: 15,
+    days: [1, 2, 3, 4, 5, 6],
+    roles: ['admin', 'manager', 'operator'],
+    message: 'Antes de encerrar, confira se todas as vendas de hoje foram lançadas corretamente.',
+  },
 }
 
 function roleBadgeClass(role) {
@@ -36,6 +45,22 @@ function boolFromExtra(value, fallback = true) {
   if (value === undefined || value === null) return fallback
   return Boolean(value)
 }
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: 'Dom' },
+  { value: 1, label: 'Seg' },
+  { value: 2, label: 'Ter' },
+  { value: 3, label: 'Qua' },
+  { value: 4, label: 'Qui' },
+  { value: 5, label: 'Sex' },
+  { value: 6, label: 'Sáb' },
+]
+
+const REVIEW_ROLE_OPTIONS = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'manager', label: 'Gerente' },
+  { value: 'operator', label: 'Operador' },
+]
 
 export default function SettingsPage() {
   const { user, profile } = useAuth()
@@ -68,6 +93,26 @@ export default function SettingsPage() {
 
   function updateExtra(key, value) {
     setSettingsExtra(prev => ({ ...(prev || {}), [key]: value }))
+  }
+
+  function updateReviewConfig(key, value) {
+    setSettingsExtra(prev => {
+      const current = { ...(DEFAULT_EXTRA.daily_sales_review || {}), ...((prev || {}).daily_sales_review || {}) }
+      return {
+        ...(prev || {}),
+        daily_sales_review: { ...current, [key]: value },
+      }
+    })
+  }
+
+  function toggleReviewArrayValue(key, value) {
+    const current = { ...(DEFAULT_EXTRA.daily_sales_review || {}), ...((settingsExtra || {}).daily_sales_review || {}) }
+    const values = Array.isArray(current[key]) ? current[key] : []
+    const normalized = key === 'days' ? Number(value) : value
+    const next = values.includes(normalized)
+      ? values.filter(item => item !== normalized)
+      : [...values, normalized]
+    updateReviewConfig(key, next)
   }
 
   async function loadSettings() {
@@ -435,6 +480,103 @@ export default function SettingsPage() {
                 />
               </label>
             ))}
+          </div>
+
+
+          <div className="rounded-2xl border border-brand-100 bg-brand-50/60 p-4 space-y-4">
+            <div className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5 text-brand-600" />
+              <div>
+                <h4 className="font-display font-semibold text-slate-800">Conferência de Vendas</h4>
+                <p className="text-xs text-slate-500">Configure o aviso leve para revisar as vendas do dia, sem virar fechamento de caixa.</p>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-3">
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-white/80 bg-white px-3 py-2.5">
+                <span className="text-sm text-slate-700">Ativar aviso automático</span>
+                <input
+                  type="checkbox"
+                  checked={boolFromExtra(settingsExtra.daily_sales_review?.enabled, true)}
+                  onChange={e => updateReviewConfig('enabled', e.target.checked)}
+                />
+              </label>
+              <div className="form-group">
+                <label className="label"><Clock className="w-3.5 h-3.5 inline mr-1" /> Horário do aviso</label>
+                <input
+                  type="time"
+                  className="input bg-white"
+                  value={settingsExtra.daily_sales_review?.time || '19:20'}
+                  onChange={e => updateReviewConfig('time', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="label">Repetir a cada X minutos</label>
+                <input
+                  type="number"
+                  min="5"
+                  className="input bg-white"
+                  value={settingsExtra.daily_sales_review?.repeat_interval_minutes ?? 15}
+                  onChange={e => updateReviewConfig('repeat_interval_minutes', Number(e.target.value || 15))}
+                />
+              </div>
+            </div>
+
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-white/80 bg-white px-3 py-2.5">
+              <span className="text-sm text-slate-700">Repetir aviso se o dia ainda não foi conferido</span>
+              <input
+                type="checkbox"
+                checked={boolFromExtra(settingsExtra.daily_sales_review?.repeat_enabled, true)}
+                onChange={e => updateReviewConfig('repeat_enabled', e.target.checked)}
+              />
+            </label>
+
+            <div className="space-y-2">
+              <p className="label">Dias de conferência</p>
+              <div className="flex flex-wrap gap-2">
+                {WEEKDAY_OPTIONS.map(day => {
+                  const active = (settingsExtra.daily_sales_review?.days || DEFAULT_EXTRA.daily_sales_review.days).includes(day.value)
+                  return (
+                    <button
+                      key={day.value}
+                      type="button"
+                      className={active ? 'btn-primary btn-sm' : 'btn-outline btn-sm bg-white'}
+                      onClick={() => toggleReviewArrayValue('days', day.value)}
+                    >
+                      {day.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="label">Exibir aviso para</p>
+              <div className="flex flex-wrap gap-2">
+                {REVIEW_ROLE_OPTIONS.map(role => {
+                  const active = (settingsExtra.daily_sales_review?.roles || DEFAULT_EXTRA.daily_sales_review.roles).includes(role.value)
+                  return (
+                    <button
+                      key={role.value}
+                      type="button"
+                      className={active ? 'btn-primary btn-sm' : 'btn-outline btn-sm bg-white'}
+                      onClick={() => toggleReviewArrayValue('roles', role.value)}
+                    >
+                      {role.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="label">Mensagem do aviso</label>
+              <textarea
+                className="input min-h-[80px] bg-white"
+                value={settingsExtra.daily_sales_review?.message || DEFAULT_EXTRA.daily_sales_review.message}
+                onChange={e => updateReviewConfig('message', e.target.value)}
+              />
+            </div>
           </div>
         </section>
 
