@@ -55,6 +55,49 @@ function currentDate() {
   return new Date().toISOString().slice(0, 10)
 }
 
+function parseDateInput(dateValue) {
+  const [year, month, day] = String(dateValue || '').slice(0, 10).split('-').map(Number)
+  if (!year || !month || !day) return new Date()
+  return new Date(year, month - 1, day)
+}
+
+function dateToInput(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addMonthsKeepingDay(dateValue, monthsToAdd) {
+  const base = parseDateInput(dateValue)
+  const originalDay = base.getDate()
+  const target = new Date(base.getFullYear(), base.getMonth() + monthsToAdd, 1)
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+  target.setDate(Math.min(originalDay, lastDay))
+  return dateToInput(target)
+}
+
+function currencyToCents(value) {
+  return Math.round((Number(value) || 0) * 100)
+}
+
+function centsToCurrency(cents) {
+  return Number((Number(cents || 0) / 100).toFixed(2))
+}
+
+function splitAmountInInstallments(totalAmount, installments) {
+  const count = Math.max(1, Number(installments) || 1)
+  const totalCents = currencyToCents(totalAmount)
+  const base = Math.floor(totalCents / count)
+  let remainder = totalCents - base * count
+
+  return Array.from({ length: count }, () => {
+    const cents = base + (remainder > 0 ? 1 : 0)
+    remainder -= remainder > 0 ? 1 : 0
+    return centsToCurrency(cents)
+  })
+}
+
 function getMonthRange() {
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth(), 1)
@@ -349,6 +392,12 @@ export default function VehiclesPage() {
                       <td>{EXPENSE_TYPE_LABELS[item.type] || item.type}</td>
                       <td>
                         <div className="text-sm text-slate-700">{item.description}</div>
+                        {item.installment_total > 1 && (
+                          <div className="text-xs text-brand-700 mt-0.5 font-medium">
+                            Parcela {item.installment_number}/{item.installment_total}
+                            {item.installment_total_amount ? ` · Total ${formatCurrency(item.installment_total_amount)}` : ''}
+                          </div>
+                        )}
                         {item.type === 'fuel' && (
                           <div className="text-xs text-slate-500 mt-0.5">
                             {FUEL_TYPE_LABELS[item.fuel_type] || item.fuel_type || 'Combustível'}
@@ -526,6 +575,11 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   const [stationName, setStationName] = useState('')
   const [stationAddress, setStationAddress] = useState('')
   const [notes, setNotes] = useState('')
+  const [installmentMode, setInstallmentMode] = useState('single')
+  const [calculationMode, setCalculationMode] = useState('total')
+  const [installments, setInstallments] = useState('1')
+  const [installmentAmount, setInstallmentAmount] = useState('')
+  const [interestRate, setInterestRate] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -545,13 +599,38 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     setStationName('')
     setStationAddress('')
     setNotes('')
+    setInstallmentMode('single')
+    setCalculationMode('total')
+    setInstallments('1')
+    setInstallmentAmount('')
+    setInterestRate('')
   }, [open, initialVehicleId, vehicles])
 
   const selectedVehicle = vehicles.find(v => v.id === vehicleId)
+  const selectedPaymentMethod = paymentMethods.find(pm => pm.id === paymentMethodId)
+  const isCreditPayment = selectedPaymentMethod?.type === 'credit'
   const paymentOptions = paymentMethods
     .filter(pm => VEHICLE_PAYMENT_TYPES.includes(pm.type))
     .sort((a, b) => VEHICLE_PAYMENT_TYPES.indexOf(a.type) - VEHICLE_PAYMENT_TYPES.indexOf(b.type))
     .map(pm => ({ value: pm.id, label: `${pm.name}${PAYMENT_TYPES[pm.type] ? ` (${PAYMENT_TYPES[pm.type]})` : ''}` }))
+
+  const installmentCount = installmentMode === 'installments' ? Math.max(1, Number(installments) || 1) : 1
+  const amountValue = parseCurrency(amount)
+  const inputInstallmentAmount = parseCurrency(installmentAmount)
+  const interestPercent = Number(String(interestRate || '').replace(',', '.')) || 0
+  const baseTotal = calculationMode === 'installment' && installmentMode === 'installments'
+    ? inputInstallmentAmount * installmentCount
+    : amountValue
+  const totalWithInterest = calculationMode === 'total'
+    ? baseTotal * (1 + interestPercent / 100)
+    : baseTotal
+  const installmentValues = splitAmountInInstallments(totalWithInterest, installmentCount)
+  const calculatedInstallmentAmount = installmentValues[0] || 0
+  const installmentPreview = Array.from({ length: installmentCount }, (_, index) => ({
+    number: index + 1,
+    dueDate: addMonthsKeepingDay(expenseDate, index),
+    amount: installmentValues[index] || 0,
+  }))
 
   function handleTypeChange(value) {
     setType(value)
@@ -559,12 +638,85 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     setDescription(label)
   }
 
+  function handleAmountChange(value) {
+    setAmount(value)
+    if (calculationMode === 'total') {
+      const parsed = parseCurrency(value)
+      const adjusted = parsed * (1 + interestPercent / 100)
+      const firstInstallment = splitAmountInInstallments(adjusted, installmentCount)[0] || 0
+      setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
+    }
+  }
+
+  function handleInstallmentAmountChange(value) {
+    setInstallmentAmount(value)
+    if (calculationMode === 'installment') {
+      const parsed = parseCurrency(value)
+      setAmount(maskCurrency(String(Math.round(parsed * installmentCount * 100))))
+    }
+  }
+
+  function handleInstallmentsChange(value) {
+    const safeValue = String(Math.max(1, Number(value) || 1))
+    setInstallments(safeValue)
+
+    if (calculationMode === 'installment') {
+      const parsedInstallment = parseCurrency(installmentAmount)
+      setAmount(maskCurrency(String(Math.round(parsedInstallment * Number(safeValue) * 100))))
+    } else {
+      const parsedAmount = parseCurrency(amount)
+      const adjusted = parsedAmount * (1 + interestPercent / 100)
+      const firstInstallment = splitAmountInInstallments(adjusted, Number(safeValue))[0] || 0
+      setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
+    }
+  }
+
+  function handleCalculationModeChange(value) {
+    setCalculationMode(value)
+    if (value === 'installment') {
+      const parsedInstallment = parseCurrency(installmentAmount)
+      if (parsedInstallment > 0) {
+        setAmount(maskCurrency(String(Math.round(parsedInstallment * installmentCount * 100))))
+      }
+    } else {
+      const adjusted = amountValue * (1 + interestPercent / 100)
+      const firstInstallment = splitAmountInInstallments(adjusted, installmentCount)[0] || 0
+      setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
+    }
+  }
+
+  function handleInterestChange(value) {
+    setInterestRate(value)
+    if (calculationMode === 'total') {
+      const parsedInterest = Number(String(value || '').replace(',', '.')) || 0
+      const adjusted = amountValue * (1 + parsedInterest / 100)
+      const firstInstallment = splitAmountInInstallments(adjusted, installmentCount)[0] || 0
+      setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
+    }
+  }
+
+  function handleInstallmentModeChange(value) {
+    setInstallmentMode(value)
+    if (value === 'single') {
+      setInstallments('1')
+      setInstallmentAmount('')
+      setInterestRate('')
+      setCalculationMode('total')
+    } else {
+      const count = Math.max(2, Number(installments) || 6)
+      setInstallments(String(count))
+      const firstInstallment = splitAmountInInstallments(amountValue, count)[0] || 0
+      setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
+    }
+  }
+
   function handleUnitPriceChange(value) {
     setUnitPrice(value)
     const parsedLiters = Number(String(liters || '').replace(',', '.')) || 0
     const parsedPrice = parseCurrency(value)
     if (parsedLiters > 0 && parsedPrice > 0) {
-      setAmount(maskCurrency(Math.round(parsedLiters * parsedPrice * 100).toString()))
+      const total = parsedLiters * parsedPrice
+      setAmount(maskCurrency(Math.round(total * 100).toString()))
     }
   }
 
@@ -573,7 +725,8 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     const parsedLiters = Number(String(value || '').replace(',', '.')) || 0
     const parsedPrice = parseCurrency(unitPrice)
     if (parsedLiters > 0 && parsedPrice > 0) {
-      setAmount(maskCurrency(Math.round(parsedLiters * parsedPrice * 100).toString()))
+      const total = parsedLiters * parsedPrice
+      setAmount(maskCurrency(Math.round(total * 100).toString()))
     }
   }
 
@@ -588,35 +741,53 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
       return
     }
 
-    const amountValue = parseCurrency(amount)
-    if (amountValue <= 0) {
+    if (installmentMode === 'installments' && installmentCount < 2) {
+      toast.error('Informe pelo menos 2 parcelas')
+      return
+    }
+
+    if (totalWithInterest <= 0) {
       toast.error('Informe um valor válido')
       return
     }
 
     setSubmitting(true)
 
-    const expensePayload = {
-      company_id: companyId,
-      name: buildExpenseName(selectedVehicle.name, type),
-      category: getExpenseCategory(type),
-      amount: amountValue,
-      due_date: expenseDate,
-      recurrence: 'none',
-      status,
-      paid_at: status === 'paid' ? `${expenseDate}T12:00:00` : null,
-      paid_amount: status === 'paid' ? amountValue : null,
-      notes: notes || null,
-      created_by: userId,
-      payment_method_id: paymentMethodId,
-      source_type: 'vehicle',
-    }
+    const groupId = installmentMode === 'installments' ? crypto.randomUUID() : null
+    const baseName = buildExpenseName(selectedVehicle.name, type)
+    const baseDescription = description || EXPENSE_TYPE_LABELS[type]
+    const expenseRows = installmentPreview.map(part => {
+      const installmentSuffix = installmentMode === 'installments' ? ` (${part.number}/${installmentCount})` : ''
+      const installmentNote = installmentMode === 'installments'
+        ? `Parcelamento ${part.number}/${installmentCount}. Total original: ${formatCurrency(baseTotal)}. Total com juros: ${formatCurrency(totalWithInterest)}. Juros total: ${interestPercent || 0}%.`
+        : null
 
-    const { data: expense, error: expenseError } = await supabase
+      return {
+        company_id: companyId,
+        name: `${baseName}${installmentSuffix}`,
+        category: getExpenseCategory(type),
+        amount: part.amount,
+        due_date: part.dueDate,
+        recurrence: 'none',
+        status,
+        paid_at: status === 'paid' ? `${part.dueDate}T12:00:00` : null,
+        paid_amount: status === 'paid' ? part.amount : null,
+        notes: [notes || null, installmentNote].filter(Boolean).join('\n') || null,
+        created_by: userId,
+        payment_method_id: paymentMethodId,
+        source_type: 'vehicle',
+        installment_group_id: groupId,
+        installment_number: part.number,
+        installment_total: installmentCount,
+        installment_total_amount: Number(totalWithInterest.toFixed(2)),
+        installment_interest_rate: interestPercent || 0,
+      }
+    })
+
+    const { data: expenses, error: expenseError } = await supabase
       .from('expenses')
-      .insert(expensePayload)
-      .select('id')
-      .single()
+      .insert(expenseRows)
+      .select('id, due_date, amount, installment_number')
 
     if (expenseError) {
       setSubmitting(false)
@@ -624,50 +795,62 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
       return
     }
 
-    const vehicleExpensePayload = {
-      company_id: companyId,
-      vehicle_id: vehicleId,
-      expense_id: expense.id,
-      type,
-      description: description || EXPENSE_TYPE_LABELS[type],
-      amount: amountValue,
-      expense_date: expenseDate,
-      payment_method_id: paymentMethodId,
-      fuel_type: type === 'fuel' ? fuelType : null,
-      liters: type === 'fuel' && liters ? Number(String(liters).replace(',', '.')) : null,
-      unit_price: type === 'fuel' && unitPrice ? parseCurrency(unitPrice) : null,
-      odometer_km: type === 'fuel' && odometerKm ? Number(odometerKm) : null,
-      station_name: type === 'fuel' && stationName ? stationName : null,
-      station_address: type === 'fuel' && stationAddress ? stationAddress : null,
-      notes: notes || null,
-      created_by: userId,
-    }
+    const vehicleExpenseRows = expenses.map(expense => {
+      const partNumber = expense.installment_number || 1
+      const installmentSuffix = installmentMode === 'installments' ? ` (${partNumber}/${installmentCount})` : ''
+      return {
+        company_id: companyId,
+        vehicle_id: vehicleId,
+        expense_id: expense.id,
+        type,
+        description: `${baseDescription}${installmentSuffix}`,
+        amount: Number(expense.amount || 0),
+        expense_date: expense.due_date,
+        payment_method_id: paymentMethodId,
+        fuel_type: type === 'fuel' ? fuelType : null,
+        liters: type === 'fuel' && liters ? Number(String(liters).replace(',', '.')) : null,
+        unit_price: type === 'fuel' && unitPrice ? parseCurrency(unitPrice) : null,
+        odometer_km: type === 'fuel' && odometerKm ? Number(odometerKm) : null,
+        station_name: type === 'fuel' && stationName ? stationName : null,
+        station_address: type === 'fuel' && stationAddress ? stationAddress : null,
+        notes: notes || null,
+        created_by: userId,
+        installment_group_id: groupId,
+        installment_number: partNumber,
+        installment_total: installmentCount,
+        installment_total_amount: Number(totalWithInterest.toFixed(2)),
+        installment_interest_rate: interestPercent || 0,
+      }
+    })
 
-    const { data: vehicleExpense, error: vehicleExpenseError } = await supabase
+    const { data: vehicleExpenses, error: vehicleExpenseError } = await supabase
       .from('vehicle_expenses')
-      .insert(vehicleExpensePayload)
-      .select('id')
-      .single()
+      .insert(vehicleExpenseRows)
+      .select('id, expense_id')
 
     if (vehicleExpenseError) {
-      await supabase.from('expenses').delete().eq('id', expense.id)
+      await supabase.from('expenses').delete().in('id', expenses.map(exp => exp.id))
       setSubmitting(false)
       toast.error(vehicleExpenseError.message || 'Erro ao criar despesa do veículo')
       return
     }
 
-    await supabase
+    await Promise.all(vehicleExpenses.map(item => supabase
       .from('expenses')
-      .update({ source_id: vehicleExpense.id })
-      .eq('id', expense.id)
+      .update({ source_id: item.id })
+      .eq('id', item.expense_id)
+    ))
 
     setSubmitting(false)
-    toast.success('Despesa de veículo lançada')
+    toast.success(installmentMode === 'installments'
+      ? `Despesa parcelada lançada em ${installmentCount} parcelas`
+      : 'Despesa de veículo lançada'
+    )
     onSuccess()
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nova despesa de veículo" maxWidth="max-w-2xl">
+    <Modal open={open} onClose={onClose} title="Nova despesa de veículo" maxWidth="max-w-4xl">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <SelectInput
@@ -685,7 +868,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
           <FormField label="Descrição" required>
             <input className="input" value={description} onChange={e => setDescription(e.target.value)} required />
           </FormField>
-          <FormField label="Data" required>
+          <FormField label="Data da primeira parcela" required>
             <input className="input" type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} required />
           </FormField>
         </div>
@@ -724,11 +907,107 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
           <FormField label="Valor total" required>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
-              <input className="input pl-8" value={amount} onChange={e => setAmount(maskCurrency(e.target.value))} placeholder="0,00" inputMode="numeric" required />
+              <input className="input pl-8" value={amount} onChange={e => handleAmountChange(maskCurrency(e.target.value))} placeholder="0,00" inputMode="numeric" required />
             </div>
           </FormField>
           <SelectInput label="Forma de pagamento" value={paymentMethodId} onChange={setPaymentMethodId} options={paymentOptions} placeholder="Selecione" required />
-          <SelectInput label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} required />
+          <SelectInput label="Status das parcelas" value={status} onChange={setStatus} options={STATUS_OPTIONS} required />
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+            <div>
+              <p className="font-semibold text-slate-900">Parcelamento</p>
+              <p className="text-sm text-slate-500">Crie parcelas automaticamente em Despesas e no Calendário.</p>
+            </div>
+            {!isCreditPayment && installmentMode === 'installments' && (
+              <span className="text-xs font-semibold text-warning-700 bg-warning-100 rounded-full px-3 py-1">
+                Atenção: parcelamento normalmente é usado com cartão de crédito.
+              </span>
+            )}
+          </div>
+
+          <div className="grid md:grid-cols-4 gap-4">
+            <SelectInput
+              label="Tipo"
+              value={installmentMode}
+              onChange={handleInstallmentModeChange}
+              options={[{ value: 'single', label: 'À vista / parcela única' }, { value: 'installments', label: 'Parcelado' }]}
+            />
+            <SelectInput
+              label="Calcular por"
+              value={calculationMode}
+              onChange={handleCalculationModeChange}
+              options={[{ value: 'total', label: 'Valor total' }, { value: 'installment', label: 'Valor da parcela' }]}
+              disabled={installmentMode !== 'installments'}
+            />
+            <FormField label="Parcelas">
+              <input
+                className="input"
+                type="number"
+                min="1"
+                max="48"
+                value={installments}
+                disabled={installmentMode !== 'installments'}
+                onChange={e => handleInstallmentsChange(e.target.value)}
+              />
+            </FormField>
+            <FormField label="Juros total (%)">
+              <input
+                className="input"
+                inputMode="decimal"
+                value={interestRate}
+                disabled={installmentMode !== 'installments' || calculationMode === 'installment'}
+                onChange={e => handleInterestChange(e.target.value)}
+                placeholder="0"
+              />
+            </FormField>
+          </div>
+
+          {installmentMode === 'installments' && (
+            <>
+              <div className="grid md:grid-cols-3 gap-4">
+                <FormField label="Valor da parcela">
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                    <input
+                      className="input pl-8"
+                      value={calculationMode === 'total' ? maskCurrency(String(Math.round(calculatedInstallmentAmount * 100))) : installmentAmount}
+                      onChange={e => handleInstallmentAmountChange(maskCurrency(e.target.value))}
+                      inputMode="numeric"
+                      disabled={calculationMode === 'total'}
+                      placeholder="0,00"
+                    />
+                  </div>
+                </FormField>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total com juros</p>
+                  <p className="text-xl font-display font-bold text-slate-900 mt-1">{formatCurrency(totalWithInterest)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumo</p>
+                  <p className="text-sm font-semibold text-slate-800 mt-1">
+                    {installmentCount}x de {formatCurrency(calculatedInstallmentAmount)}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Ex.: R$ 4.214,00 em 6x = R$ 702,33.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-brand-100 bg-brand-50 p-3">
+                <p className="text-sm font-semibold text-brand-900 mb-2">Prévia das parcelas</p>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-auto pr-1">
+                  {installmentPreview.map(part => (
+                    <div key={part.number} className="rounded-lg bg-white border border-brand-100 px-3 py-2 text-sm flex justify-between gap-3">
+                      <span className="font-medium text-slate-700">{part.number}/{installmentCount} · {formatDate(part.dueDate)}</span>
+                      <span className="font-bold text-slate-900">{formatCurrency(part.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <FormField label="Observações">
@@ -736,7 +1015,10 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
         </FormField>
 
         <div className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">
-          Esta despesa será registrada também na seção <b>Despesas</b> da empresa, sem recorrência, para entrar no financeiro.
+          {installmentMode === 'installments'
+            ? <>Esta despesa será registrada em <b>{installmentCount} parcelas</b> na seção <b>Despesas</b> e aparecerá no <b>Calendário</b> conforme o vencimento de cada parcela.</>
+            : <>Esta despesa será registrada também na seção <b>Despesas</b> da empresa, sem recorrência, para entrar no financeiro.</>
+          }
         </div>
 
         <div className="flex justify-end gap-2 pt-2">

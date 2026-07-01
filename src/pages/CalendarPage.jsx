@@ -183,7 +183,7 @@ export default function CalendarPage() {
         .order('event_date'),
       supabase
         .from('expenses')
-        .select('id, name, amount, due_date, status, category')
+        .select('id, name, amount, due_date, status, category, source_type')
         .eq('company_id', companyId)
         .gte('due_date', range.start)
         .lte('due_date', range.end)
@@ -208,7 +208,9 @@ export default function CalendarPage() {
   }
 
   const events = useMemo(() => {
-    const expenseEvents = expenses.map(exp => ({
+    const expenseEvents = expenses
+      .filter(exp => exp.source_type !== 'vehicle')
+      .map(exp => ({
       id: `expense-${exp.id}`,
       source: 'expense',
       type: 'expense',
