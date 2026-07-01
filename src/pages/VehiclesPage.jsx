@@ -45,11 +45,13 @@ const FUEL_TYPES = [
 const FUEL_TYPE_LABELS = FUEL_TYPES.reduce((acc, item) => ({ ...acc, [item.value]: item.label }), {})
 
 const STATUS_OPTIONS = [
+  { value: 'pending', label: 'Em aberto / lembrete' },
   { value: 'paid', label: 'Pago' },
-  { value: 'pending', label: 'Pendente' },
 ]
 
 const VEHICLE_PAYMENT_TYPES = ['cash', 'pix', 'credit', 'debit']
+const INSTALLMENT_ELIGIBLE_EXPENSE_TYPES = ['maintenance', 'document', 'insurance', 'tire', 'other']
+const INSTALLMENT_ELIGIBLE_LABEL = 'Manutenção, documento/licenciamento, seguro, pneu e outra despesa'
 
 function currentDate() {
   return new Date().toISOString().slice(0, 10)
@@ -567,7 +569,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   const [amount, setAmount] = useState('')
   const [expenseDate, setExpenseDate] = useState(currentDate())
   const [paymentMethodId, setPaymentMethodId] = useState('')
-  const [status, setStatus] = useState('paid')
+  const [status, setStatus] = useState('pending')
   const [fuelType, setFuelType] = useState('gasoline')
   const [liters, setLiters] = useState('')
   const [unitPrice, setUnitPrice] = useState('')
@@ -591,7 +593,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     setAmount('')
     setExpenseDate(currentDate())
     setPaymentMethodId('')
-    setStatus('paid')
+    setStatus('pending')
     setFuelType('gasoline')
     setLiters('')
     setUnitPrice('')
@@ -609,10 +611,29 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   const selectedVehicle = vehicles.find(v => v.id === vehicleId)
   const selectedPaymentMethod = paymentMethods.find(pm => pm.id === paymentMethodId)
   const isCreditPayment = selectedPaymentMethod?.type === 'credit'
+  const canUseInstallments = INSTALLMENT_ELIGIBLE_EXPENSE_TYPES.includes(type)
   const paymentOptions = paymentMethods
     .filter(pm => VEHICLE_PAYMENT_TYPES.includes(pm.type))
     .sort((a, b) => VEHICLE_PAYMENT_TYPES.indexOf(a.type) - VEHICLE_PAYMENT_TYPES.indexOf(b.type))
     .map(pm => ({ value: pm.id, label: `${pm.name}${PAYMENT_TYPES[pm.type] ? ` (${PAYMENT_TYPES[pm.type]})` : ''}` }))
+
+  useEffect(() => {
+    if (!open) return
+    if (installmentMode === 'installments' || selectedPaymentMethod?.type === 'credit') {
+      setStatus('pending')
+    }
+  }, [open, installmentMode, selectedPaymentMethod?.type])
+
+  useEffect(() => {
+    if (!open) return
+    if (!canUseInstallments && installmentMode !== 'single') {
+      setInstallmentMode('single')
+      setInstallments('1')
+      setInstallmentAmount('')
+      setInterestRate('')
+      setCalculationMode('total')
+    }
+  }, [open, canUseInstallments, installmentMode])
 
   const installmentCount = installmentMode === 'installments' ? Math.max(1, Number(installments) || 1) : 1
   const amountValue = parseCurrency(amount)
@@ -636,6 +657,14 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     setType(value)
     const label = EXPENSE_TYPE_LABELS[value] || 'Despesa'
     setDescription(label)
+
+    if (!INSTALLMENT_ELIGIBLE_EXPENSE_TYPES.includes(value)) {
+      setInstallmentMode('single')
+      setInstallments('1')
+      setInstallmentAmount('')
+      setInterestRate('')
+      setCalculationMode('total')
+    }
   }
 
   function handleAmountChange(value) {
@@ -696,6 +725,11 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   }
 
   function handleInstallmentModeChange(value) {
+    if (value === 'installments' && !canUseInstallments) {
+      toast.error('Parcelamento disponível apenas para manutenção, documento/licenciamento, seguro, pneu e outra despesa')
+      return
+    }
+
     setInstallmentMode(value)
     if (value === 'single') {
       setInstallments('1')
@@ -705,6 +739,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     } else {
       const count = Math.max(2, Number(installments) || 6)
       setInstallments(String(count))
+      setStatus('pending')
       const firstInstallment = splitAmountInInstallments(amountValue, count)[0] || 0
       setInstallmentAmount(maskCurrency(String(Math.round(firstInstallment * 100))))
     }
@@ -850,8 +885,8 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nova despesa de veículo" maxWidth="max-w-4xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <Modal open={open} onClose={onClose} title="Nova despesa de veículo" maxWidth="max-w-5xl">
+      <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid sm:grid-cols-2 gap-4">
           <SelectInput
             label="Veículo"
@@ -864,13 +899,15 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
           <SelectInput label="Tipo de despesa" value={type} onChange={handleTypeChange} options={EXPENSE_TYPES} required />
         </div>
 
-        <div className="grid sm:grid-cols-2 gap-4">
+        <div className={`grid ${canUseInstallments ? 'grid-cols-1' : 'sm:grid-cols-2'} gap-4`}>
           <FormField label="Descrição" required>
             <input className="input" value={description} onChange={e => setDescription(e.target.value)} required />
           </FormField>
-          <FormField label="Data da primeira parcela" required>
-            <input className="input" type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} required />
-          </FormField>
+          {!canUseInstallments && (
+            <FormField label="Data da despesa" required>
+              <input className="input" type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} required />
+            </FormField>
+          )}
         </div>
 
         {type === 'fuel' && (
@@ -903,112 +940,130 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
           </div>
         )}
 
-        <div className="grid sm:grid-cols-3 gap-4">
-          <FormField label="Valor total" required>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
-              <input className="input pl-8" value={amount} onChange={e => handleAmountChange(maskCurrency(e.target.value))} placeholder="0,00" inputMode="numeric" required />
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+          <div>
+            <p className="font-semibold text-slate-900">Dados financeiros</p>
+            <p className="text-sm text-slate-500">
+              Para cartão pessoal ou pagamento futuro, deixe o status como <b>Em aberto / lembrete</b>. Assim a parcela entra em Despesas sem aparecer como paga.
+            </p>
+          </div>
+          <div className="grid lg:grid-cols-3 gap-4 items-start">
+            <FormField label="Valor total" required>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                <input className="input pl-8" value={amount} onChange={e => handleAmountChange(maskCurrency(e.target.value))} placeholder="0,00" inputMode="numeric" required />
+              </div>
+            </FormField>
+            <SelectInput label="Forma de pagamento" value={paymentMethodId} onChange={setPaymentMethodId} options={paymentOptions} placeholder="Selecione" required />
+            <div>
+              <SelectInput label="Status em Despesas" value={status} onChange={setStatus} options={STATUS_OPTIONS} required />
+              <p className="mt-1 text-xs text-slate-500">
+                <b>Em aberto</b>: aparece como pendência/lembrete. <b>Pago</b>: já entra baixado no financeiro.
+              </p>
             </div>
-          </FormField>
-          <SelectInput label="Forma de pagamento" value={paymentMethodId} onChange={setPaymentMethodId} options={paymentOptions} placeholder="Selecione" required />
-          <SelectInput label="Status das parcelas" value={status} onChange={setStatus} options={STATUS_OPTIONS} required />
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-            <div>
-              <p className="font-semibold text-slate-900">Parcelamento</p>
-              <p className="text-sm text-slate-500">Crie parcelas automaticamente em Despesas e no Calendário.</p>
+        {canUseInstallments && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <div>
+                <p className="font-semibold text-slate-900">Parcelamento</p>
+                <p className="text-sm text-slate-500">Disponível para {INSTALLMENT_ELIGIBLE_LABEL}. Crie parcelas automaticamente em Despesas e no Calendário.</p>
+              </div>
+              {!isCreditPayment && installmentMode === 'installments' && (
+                <span className="text-xs font-semibold text-warning-700 bg-warning-100 rounded-full px-3 py-1">
+                  Atenção: parcelamento normalmente é usado com cartão de crédito.
+                </span>
+              )}
             </div>
-            {!isCreditPayment && installmentMode === 'installments' && (
-              <span className="text-xs font-semibold text-warning-700 bg-warning-100 rounded-full px-3 py-1">
-                Atenção: parcelamento normalmente é usado com cartão de crédito.
-              </span>
+
+            <div className="grid md:grid-cols-2 xl:grid-cols-5 gap-4">
+              <FormField label="Data da primeira parcela" required>
+                <input className="input" type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} required />
+              </FormField>
+              <SelectInput
+                label="Tipo"
+                value={installmentMode}
+                onChange={handleInstallmentModeChange}
+                options={[{ value: 'single', label: 'À vista / parcela única' }, { value: 'installments', label: 'Parcelado' }]}
+              />
+              <SelectInput
+                label="Calcular por"
+                value={calculationMode}
+                onChange={handleCalculationModeChange}
+                options={[{ value: 'total', label: 'Valor total' }, { value: 'installment', label: 'Valor da parcela' }]}
+                disabled={installmentMode !== 'installments'}
+              />
+              <FormField label="Parcelas">
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  max="48"
+                  value={installments}
+                  disabled={installmentMode !== 'installments'}
+                  onChange={e => handleInstallmentsChange(e.target.value)}
+                />
+              </FormField>
+              <FormField label="Juros total (%)">
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  value={interestRate}
+                  disabled={installmentMode !== 'installments' || calculationMode === 'installment'}
+                  onChange={e => handleInterestChange(e.target.value)}
+                  placeholder="0"
+                />
+              </FormField>
+            </div>
+
+            {installmentMode === 'installments' && (
+              <>
+                <div className="grid md:grid-cols-3 gap-4 items-stretch">
+                  <FormField label="Valor da parcela">
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                      <input
+                        className="input pl-8"
+                        value={calculationMode === 'total' ? maskCurrency(String(Math.round(calculatedInstallmentAmount * 100))) : installmentAmount}
+                        onChange={e => handleInstallmentAmountChange(maskCurrency(e.target.value))}
+                        inputMode="numeric"
+                        disabled={calculationMode === 'total'}
+                        placeholder="0,00"
+                      />
+                    </div>
+                  </FormField>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total com juros</p>
+                    <p className="text-xl font-display font-bold text-slate-900 mt-1">{formatCurrency(totalWithInterest)}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumo</p>
+                    <p className="text-sm font-semibold text-slate-800 mt-1">
+                      {installmentCount}x de {formatCurrency(calculatedInstallmentAmount)}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Ex.: R$ 4.214,00 em 6x = R$ 702,33.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-brand-100 bg-brand-50 p-3">
+                  <p className="text-sm font-semibold text-brand-900 mb-2">Prévia das parcelas</p>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-auto pr-1">
+                    {installmentPreview.map(part => (
+                      <div key={part.number} className="rounded-lg bg-white border border-brand-100 px-3 py-2 text-sm flex justify-between gap-3">
+                        <span className="font-medium text-slate-700">{part.number}/{installmentCount} · {formatDate(part.dueDate)}</span>
+                        <span className="font-bold text-slate-900">{formatCurrency(part.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
             )}
           </div>
-
-          <div className="grid md:grid-cols-4 gap-4">
-            <SelectInput
-              label="Tipo"
-              value={installmentMode}
-              onChange={handleInstallmentModeChange}
-              options={[{ value: 'single', label: 'À vista / parcela única' }, { value: 'installments', label: 'Parcelado' }]}
-            />
-            <SelectInput
-              label="Calcular por"
-              value={calculationMode}
-              onChange={handleCalculationModeChange}
-              options={[{ value: 'total', label: 'Valor total' }, { value: 'installment', label: 'Valor da parcela' }]}
-              disabled={installmentMode !== 'installments'}
-            />
-            <FormField label="Parcelas">
-              <input
-                className="input"
-                type="number"
-                min="1"
-                max="48"
-                value={installments}
-                disabled={installmentMode !== 'installments'}
-                onChange={e => handleInstallmentsChange(e.target.value)}
-              />
-            </FormField>
-            <FormField label="Juros total (%)">
-              <input
-                className="input"
-                inputMode="decimal"
-                value={interestRate}
-                disabled={installmentMode !== 'installments' || calculationMode === 'installment'}
-                onChange={e => handleInterestChange(e.target.value)}
-                placeholder="0"
-              />
-            </FormField>
-          </div>
-
-          {installmentMode === 'installments' && (
-            <>
-              <div className="grid md:grid-cols-3 gap-4">
-                <FormField label="Valor da parcela">
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
-                    <input
-                      className="input pl-8"
-                      value={calculationMode === 'total' ? maskCurrency(String(Math.round(calculatedInstallmentAmount * 100))) : installmentAmount}
-                      onChange={e => handleInstallmentAmountChange(maskCurrency(e.target.value))}
-                      inputMode="numeric"
-                      disabled={calculationMode === 'total'}
-                      placeholder="0,00"
-                    />
-                  </div>
-                </FormField>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total com juros</p>
-                  <p className="text-xl font-display font-bold text-slate-900 mt-1">{formatCurrency(totalWithInterest)}</p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumo</p>
-                  <p className="text-sm font-semibold text-slate-800 mt-1">
-                    {installmentCount}x de {formatCurrency(calculatedInstallmentAmount)}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Ex.: R$ 4.214,00 em 6x = R$ 702,33.
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-brand-100 bg-brand-50 p-3">
-                <p className="text-sm font-semibold text-brand-900 mb-2">Prévia das parcelas</p>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-auto pr-1">
-                  {installmentPreview.map(part => (
-                    <div key={part.number} className="rounded-lg bg-white border border-brand-100 px-3 py-2 text-sm flex justify-between gap-3">
-                      <span className="font-medium text-slate-700">{part.number}/{installmentCount} · {formatDate(part.dueDate)}</span>
-                      <span className="font-bold text-slate-900">{formatCurrency(part.amount)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        )}
 
         <FormField label="Observações">
           <textarea className="input min-h-[80px]" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex.: abastecimento para entrega, revisão, troca de pneu, etc." />
@@ -1016,12 +1071,12 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
 
         <div className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">
           {installmentMode === 'installments'
-            ? <>Esta despesa será registrada em <b>{installmentCount} parcelas</b> na seção <b>Despesas</b> e aparecerá no <b>Calendário</b> conforme o vencimento de cada parcela.</>
-            : <>Esta despesa será registrada também na seção <b>Despesas</b> da empresa, sem recorrência, para entrar no financeiro.</>
+            ? <>Esta despesa será registrada em <b>{installmentCount} parcelas</b> na seção <b>Despesas</b> e aparecerá no <b>Calendário</b>. Status inicial: <b>{status === 'paid' ? 'Pago' : 'Em aberto / lembrete'}</b>.</>
+            : <>Esta despesa será registrada também na seção <b>Despesas</b> da empresa, sem recorrência. Status inicial: <b>{status === 'paid' ? 'Pago' : 'Em aberto / lembrete'}</b>.</>
           }
         </div>
 
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="sticky bottom-0 -mx-6 -mb-4 bg-white/95 backdrop-blur border-t border-slate-100 px-6 py-4 flex justify-end gap-2">
           <button type="button" className="btn-outline" onClick={onClose}>Cancelar</button>
           <button className="btn-primary" disabled={submitting}>{submitting ? 'Salvando...' : 'Salvar despesa'}</button>
         </div>
