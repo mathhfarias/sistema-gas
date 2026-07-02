@@ -144,9 +144,13 @@ export default function ExpensesPage() {
   const overdueOutsideTotal = overdueOutsidePeriod.reduce((s, e) => s + Number(e.amount), 0)
 
   async function markAsPaid(exp) {
+    const today = new Date().toISOString().slice(0, 10)
+    const paidDate = window.prompt('Informe a data real do pagamento. Essa data define em qual mês a despesa entra no DRE.', today)
+    if (!paidDate) return
+
     const { error } = await supabase
       .from('expenses')
-      .update({ status: 'paid', paid_at: new Date().toISOString(), paid_amount: exp.amount })
+      .update({ status: 'paid', paid_at: `${paidDate}T12:00:00`, paid_amount: exp.amount })
       .eq('id', exp.id)
     if (error) { toast.error('Erro ao marcar como pago'); return }
 
@@ -370,6 +374,7 @@ function ExpenseTimelineCard({ exp, isOutsidePeriod = false, onEdit, onPaid, onD
         </div>
         <p className="text-sm text-slate-500 mt-1">
           Vencimento: {formatExpenseDay(exp.due_date)}
+          {exp.status === 'paid' && exp.paid_at ? ` · Pago em: ${formatExpenseDay(exp.paid_at)}` : ''}
           {isOutsidePeriod ? ' · Atrasada de mês anterior' : ''}
           {exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
           {recurrence ? ` · ${recurrence}` : ''}
@@ -402,6 +407,8 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
   const [category, setCategory] = useState(editing?.category || 'other')
   const [amount, setAmount] = useState(editing ? editing.amount.toFixed(2).replace('.', ',') : '')
   const [dueDate, setDueDate] = useState(editing?.due_date || '')
+  const [status, setStatus] = useState(editing?.status || 'pending')
+  const [paidDate, setPaidDate] = useState(editing?.paid_at ? String(editing.paid_at).slice(0, 10) : '')
   const [recurrence, setRecurrence] = useState(editing?.recurrence || 'none')
   const [notes, setNotes] = useState(editing?.notes || '')
   const [paymentMethodId, setPaymentMethodId] = useState(editing?.payment_method_id || '')
@@ -413,6 +420,8 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
       setCategory(editing.category || 'other')
       setAmount(editing.amount?.toFixed(2).replace('.', ',') || '')
       setDueDate(editing.due_date || '')
+      setStatus(editing.status || 'pending')
+      setPaidDate(editing.paid_at ? String(editing.paid_at).slice(0, 10) : '')
       setRecurrence(editing.recurrence || 'none')
       setPaymentMethodId(editing.payment_method_id || '')
       setNotes(editing.notes || '')
@@ -421,6 +430,8 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
       setCategory('other')
       setAmount('')
       setDueDate('')
+      setStatus('pending')
+      setPaidDate('')
       setRecurrence('none')
       setPaymentMethodId('')
       setNotes('')
@@ -435,6 +446,9 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
       name, category,
       amount: parseCurrency(amount),
       due_date: dueDate,
+      status,
+      paid_at: status === 'paid' ? `${paidDate || dueDate}T12:00:00` : null,
+      paid_amount: status === 'paid' ? parseCurrency(amount) : null,
       recurrence, notes,
       payment_method_id: paymentMethodId || null,
       created_by: userId,
@@ -489,6 +503,24 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
             <input type="date" className="input" value={dueDate} onChange={e => setDueDate(e.target.value)} required />
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="form-group">
+            <label className="label">Status</label>
+            <select className="input" value={status} onChange={e => setStatus(e.target.value)}>
+              <option value="pending">Pendente</option>
+              <option value="overdue">Em atraso</option>
+              <option value="paid">Pago</option>
+            </select>
+          </div>
+          {status === 'paid' && (
+            <div className="form-group">
+              <label className="label">Data real do pagamento</label>
+              <input type="date" className="input" value={paidDate} onChange={e => setPaidDate(e.target.value)} />
+              <p className="text-xs text-slate-500 mt-1">Esta data define o mês em que a despesa entra no DRE.</p>
+            </div>
+          )}
+        </div>
+
         <div className="form-group">
           <label className="label">Forma de pagamento</label>
           <select className="input" value={paymentMethodId} onChange={e => setPaymentMethodId(e.target.value)}>

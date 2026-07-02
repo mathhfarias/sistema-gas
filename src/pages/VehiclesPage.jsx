@@ -133,6 +133,7 @@ export default function VehiclesPage() {
   const [expenseModalOpen, setExpenseModalOpen] = useState(false)
   const [selectedVehicleId, setSelectedVehicleId] = useState('')
   const [editingVehicle, setEditingVehicle] = useState(null)
+  const [editingExpense, setEditingExpense] = useState(null)
 
   const { data: vehicles, loading: vehiclesLoading, refetch: refetchVehicles } = useSupabaseQuery(
     () => supabase
@@ -193,6 +194,12 @@ export default function VehiclesPage() {
       fuelCount: fuelItems.length,
     }
   }, [expenseList])
+
+  function handleEditExpense(item) {
+    setSelectedVehicleId(item.vehicle_id || '')
+    setEditingExpense(item)
+    setExpenseModalOpen(true)
+  }
 
   async function handleDeleteExpense(item) {
     if (!confirm(`Excluir a despesa "${item.description}"?`)) return
@@ -418,9 +425,14 @@ export default function VehiclesPage() {
                       <td>{item.payment_methods?.name || '—'}</td>
                       <td className="text-right font-bold">{formatCurrency(item.amount)}</td>
                       <td className="text-right">
-                        <button className="btn-danger btn-sm" onClick={() => handleDeleteExpense(item)}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex justify-end gap-1">
+                          <button className="btn-outline btn-sm" onClick={() => handleEditExpense(item)} title="Editar despesa" aria-label="Editar despesa de veículo">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button className="btn-danger btn-sm" onClick={() => handleDeleteExpense(item)} title="Excluir despesa" aria-label="Excluir despesa de veículo">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -446,8 +458,9 @@ export default function VehiclesPage() {
         vehicles={vehicleList}
         paymentMethods={paymentMethods || []}
         initialVehicleId={selectedVehicleId}
-        onClose={() => setExpenseModalOpen(false)}
-        onSuccess={() => { setExpenseModalOpen(false); refetchExpenses() }}
+        expense={editingExpense}
+        onClose={() => { setExpenseModalOpen(false); setEditingExpense(null) }}
+        onSuccess={() => { setExpenseModalOpen(false); setEditingExpense(null); refetchExpenses() }}
       />
     </div>
   )
@@ -562,7 +575,7 @@ function VehicleModal({ open, companyId, vehicle, onClose, onSuccess }) {
   )
 }
 
-function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods, initialVehicleId, onClose, onSuccess }) {
+function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods, initialVehicleId, expense, onClose, onSuccess }) {
   const [vehicleId, setVehicleId] = useState(initialVehicleId || vehicles[0]?.id || '')
   const [type, setType] = useState('fuel')
   const [description, setDescription] = useState('Abastecimento')
@@ -587,6 +600,29 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   useEffect(() => {
     if (!open) return
 
+    if (expense) {
+      setVehicleId(expense.vehicle_id || initialVehicleId || vehicles[0]?.id || '')
+      setType(expense.type || 'fuel')
+      setDescription(expense.description || EXPENSE_TYPE_LABELS[expense.type] || 'Despesa')
+      setAmount(maskCurrency(String(Math.round(Number(expense.amount || 0) * 100))))
+      setExpenseDate(expense.expense_date || currentDate())
+      setPaymentMethodId(expense.payment_method_id || '')
+      setStatus(expense.expenses?.status || 'pending')
+      setFuelType(expense.fuel_type || 'gasoline')
+      setLiters(expense.liters ? String(expense.liters).replace('.', ',') : '')
+      setUnitPrice(expense.unit_price ? maskCurrency(String(Math.round(Number(expense.unit_price || 0) * 100))) : '')
+      setOdometerKm(expense.odometer_km || '')
+      setStationName(expense.station_name || '')
+      setStationAddress(expense.station_address || '')
+      setNotes(expense.notes || '')
+      setInstallmentMode('single')
+      setCalculationMode('total')
+      setInstallments('1')
+      setInstallmentAmount('')
+      setInterestRate('')
+      return
+    }
+
     setVehicleId(initialVehicleId || vehicles[0]?.id || '')
     setType('fuel')
     setDescription('Abastecimento')
@@ -606,7 +642,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
     setInstallments('1')
     setInstallmentAmount('')
     setInterestRate('')
-  }, [open, initialVehicleId, vehicles])
+  }, [open, initialVehicleId, vehicles, expense])
 
   const selectedVehicle = vehicles.find(v => v.id === vehicleId)
   const selectedPaymentMethod = paymentMethods.find(pm => pm.id === paymentMethodId)
@@ -788,6 +824,64 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
 
     setSubmitting(true)
 
+    if (expense) {
+      const expensePayload = {
+        name: buildExpenseName(selectedVehicle.name, type),
+        category: getExpenseCategory(type),
+        amount: totalWithInterest,
+        due_date: expenseDate,
+        status,
+        paid_at: status === 'paid' ? `${expenseDate}T12:00:00` : null,
+        paid_amount: status === 'paid' ? totalWithInterest : null,
+        notes: notes || null,
+        payment_method_id: paymentMethodId,
+        updated_at: new Date().toISOString(),
+      }
+
+      if (expense.expense_id) {
+        const { error: linkedError } = await supabase
+          .from('expenses')
+          .update(expensePayload)
+          .eq('id', expense.expense_id)
+        if (linkedError) {
+          setSubmitting(false)
+          toast.error(linkedError.message || 'Erro ao atualizar despesa vinculada')
+          return
+        }
+      }
+
+      const vehiclePayload = {
+        vehicle_id: vehicleId,
+        type,
+        description: description || EXPENSE_TYPE_LABELS[type],
+        amount: totalWithInterest,
+        expense_date: expenseDate,
+        payment_method_id: paymentMethodId,
+        fuel_type: type === 'fuel' ? fuelType : null,
+        liters: type === 'fuel' && liters ? Number(String(liters).replace(',', '.')) : null,
+        unit_price: type === 'fuel' && unitPrice ? parseCurrency(unitPrice) : null,
+        odometer_km: type === 'fuel' && odometerKm ? Number(odometerKm) : null,
+        station_name: type === 'fuel' && stationName ? stationName : null,
+        station_address: type === 'fuel' && stationAddress ? stationAddress : null,
+        notes: notes || null,
+      }
+
+      const { error: vehicleError } = await supabase
+        .from('vehicle_expenses')
+        .update(vehiclePayload)
+        .eq('id', expense.id)
+        .eq('company_id', companyId)
+
+      setSubmitting(false)
+      if (vehicleError) {
+        toast.error(vehicleError.message || 'Erro ao atualizar despesa do veículo')
+        return
+      }
+      toast.success('Despesa de veículo atualizada')
+      onSuccess()
+      return
+    }
+
     const groupId = installmentMode === 'installments' ? crypto.randomUUID() : null
     const baseName = buildExpenseName(selectedVehicle.name, type)
     const baseDescription = description || EXPENSE_TYPE_LABELS[type]
@@ -885,7 +979,7 @@ function VehicleExpenseModal({ open, companyId, userId, vehicles, paymentMethods
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nova despesa de veículo" maxWidth="max-w-5xl">
+    <Modal open={open} onClose={onClose} title={expense ? "Editar despesa de veículo" : "Nova despesa de veículo"} maxWidth="max-w-5xl">
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid sm:grid-cols-2 gap-4">
           <SelectInput

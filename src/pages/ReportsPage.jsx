@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt } from 'lucide-react'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
+import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt, Truck } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { financialService } from '../services/financialService'
 import { PageHeader, PageLoader, StatCard } from '../components/ui'
@@ -16,6 +16,9 @@ export default function ReportsPage() {
   const [byPayment, setByPayment] = useState([])
   const [byMachine, setByMachine] = useState([])
   const [bySaleKind, setBySaleKind] = useState(null)
+  const [byChannel, setByChannel] = useState([])
+  const [purchaseQty, setPurchaseQty] = useState([])
+  const [showExpenseDetails, setShowExpenseDetails] = useState(false)
 
   const [period, setPeriod] = useState('month')
   const [startDate, setStartDate] = useState('')
@@ -48,16 +51,20 @@ export default function ReportsPage() {
   async function loadReport() {
     setLoading(true)
     const { start, end } = getRange()
-    const [plRes, payRes, machRes, kindRes] = await Promise.all([
+    const [plRes, payRes, machRes, kindRes, channelRes, purchaseRes] = await Promise.all([
       financialService.getProfitLoss(companyId, start, end),
       financialService.getRevenueByPayment(companyId, start, end),
       financialService.getRevenueByMachine(companyId, start, end),
       financialService.getSalesByKind(companyId, start, end),
+      financialService.getSalesByChannel(companyId, start, end),
+      financialService.getPurchasesQuantityByProduct(companyId, start, end),
     ])
     if (plRes.data) setData(plRes.data)
     if (payRes.data) setByPayment(payRes.data)
     if (machRes.data) setByMachine(machRes.data)
     if (kindRes.data) setBySaleKind(kindRes.data)
+    if (channelRes.data) setByChannel(channelRes.data)
+    if (purchaseRes.data) setPurchaseQty(purchaseRes.data)
     setLoading(false)
   }
 
@@ -65,20 +72,12 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Relatórios"
-        subtitle="Análise financeira e operacional"
-      />
+      <PageHeader title="Relatórios" subtitle="Análise financeira e operacional" />
 
-      {/* Filtro de período */}
       <div className="card">
         <div className="flex flex-wrap gap-2 mb-3">
           {Object.entries(periodLabels).map(([k, v]) => (
-            <button
-              key={k}
-              className={period === k ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}
-              onClick={() => setPeriod(k)}
-            >
+            <button key={k} className={period === k ? 'btn-primary btn-sm' : 'btn-outline btn-sm'} onClick={() => setPeriod(k)}>
               {v}
             </button>
           ))}
@@ -102,25 +101,15 @@ export default function ReportsPage() {
         <div className="text-center py-12 text-slate-400">Nenhum dado encontrado para o período.</div>
       ) : (
         <>
-          {/* Cards de resumo */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard title="Receita Bruta" value={formatCurrency(data.grossRevenue)} icon={DollarSign} color="blue" />
             <StatCard title="Custo de Produtos" value={formatCurrency(data.cogs)} icon={ShoppingCart} color="orange" />
-            <StatCard title="Despesas Pagas" value={formatCurrency(data.totalPaidExpenses)} icon={Receipt} color="yellow" />
-            <StatCard
-              title="Lucro Líquido"
-              value={formatCurrency(data.netProfit)}
-              subtitle={`margem ${data.netMargin?.toFixed(1)}%`}
-              icon={data.netProfit >= 0 ? TrendingUp : TrendingDown}
-              color={data.netProfit >= 0 ? 'green' : 'red'}
-            />
+            <StatCard title="Despesas + Maquininhas" value={formatCurrency(data.totalOperatingExpenses)} icon={Receipt} color="yellow" />
+            <StatCard title="Lucro Líquido" value={formatCurrency(data.netProfit)} subtitle={`margem ${data.netMargin?.toFixed(1)}%`} icon={data.netProfit >= 0 ? TrendingUp : TrendingDown} color={data.netProfit >= 0 ? 'green' : 'red'} />
           </div>
 
-          {/* DRE simplificado */}
           <div className="card">
-            <h3 className="font-display text-sm font-semibold text-slate-700 mb-4">
-              Demonstrativo de Resultado — {periodLabels[period]}
-            </h3>
+            <h3 className="font-display text-sm font-semibold text-slate-700 mb-4">Demonstrativo de Resultado — {periodLabels[period]}</h3>
             <div className="space-y-2">
               {[
                 { label: 'Receita Bruta', value: data.grossRevenue, type: 'revenue' },
@@ -128,31 +117,18 @@ export default function ReportsPage() {
                 { label: '(-) Custo dos produtos vendidos', value: -data.cogs, type: 'cost' },
                 { label: '= Lucro Bruto', value: data.grossProfit, type: 'total', margin: data.grossMargin },
                 { label: '(-) Despesas pagas', value: -data.totalPaidExpenses, type: 'cost' },
+                { label: '(-) Mensalidade das maquininhas', value: -data.machineMonthlyFees, type: 'cost' },
                 { label: '= Lucro Líquido', value: data.netProfit, type: 'result', margin: data.netMargin },
               ].map((row, i) => (
-                <div
-                  key={i}
-                  className={`flex justify-between items-center py-2 px-3 rounded-lg ${
-                    row.type === 'result' ? 'bg-slate-900 text-white font-bold text-base' :
-                    row.type === 'total' ? 'bg-slate-100 font-semibold' :
-                    row.type === 'sub' ? 'pl-6 text-slate-500 text-sm' :
-                    ''
-                  }`}
-                >
+                <div key={i} className={`flex justify-between items-center py-2 px-3 rounded-lg ${row.type === 'result' ? 'bg-slate-900 text-white font-bold text-base' : row.type === 'total' ? 'bg-slate-100 font-semibold' : row.type === 'sub' ? 'pl-6 text-slate-500 text-sm' : ''}`}>
                   <span>{row.label}</span>
-                  <span className={`font-mono ${
-                    row.type === 'result' ? (row.value >= 0 ? 'text-green-400' : 'text-red-400') :
-                    row.value < 0 ? 'text-danger-600' : ''
-                  }`}>
+                  <span className={`font-mono ${row.type === 'result' ? (row.value >= 0 ? 'text-green-400' : 'text-red-400') : row.value < 0 ? 'text-danger-600' : ''}`}>
                     {formatCurrency(Math.abs(row.value))}
-                    {row.margin !== undefined && (
-                      <span className="ml-2 text-xs opacity-60">{row.margin.toFixed(1)}%</span>
-                    )}
+                    {row.margin !== undefined && <span className="ml-2 text-xs opacity-60">{row.margin.toFixed(1)}%</span>}
                   </span>
                 </div>
               ))}
             </div>
-
             {data.totalPendingExpenses > 0 && (
               <div className="mt-4 p-3 rounded-lg border border-warning-200 bg-warning-50 text-sm text-warning-800">
                 <strong>Atenção:</strong> Existem {formatCurrency(data.totalPendingExpenses)} em despesas pendentes/atrasadas que ainda não foram pagas e não estão no cálculo acima.
@@ -160,99 +136,126 @@ export default function ReportsPage() {
             )}
           </div>
 
-          {/* Controle operacional por tipo de venda */}
+          <div className="card">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="font-display text-sm font-semibold text-slate-700">Detalhamento das despesas do DRE</h3>
+                <p className="text-xs text-slate-500 mt-1">Agora o DRE mostra de onde vêm as despesas pagas no período. A data usada é a data de pagamento, não apenas o vencimento.</p>
+              </div>
+              <button className="btn-outline btn-sm" onClick={() => setShowExpenseDetails(v => !v)}>
+                {showExpenseDetails ? 'Ver resumo' : 'Ver detalhes'}
+              </button>
+            </div>
+
+            {!showExpenseDetails ? (
+              <div className="grid md:grid-cols-2 gap-3">
+                {(data.expenseBreakdown || []).map(item => (
+                  <div key={item.category} className="rounded-xl border border-slate-100 bg-slate-50 p-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-800 text-sm">{item.name}</p>
+                      <p className="text-xs text-slate-500">{item.count} lançamento(s)</p>
+                    </div>
+                    <p className="font-display font-bold text-danger-600">{formatCurrency(item.total)}</p>
+                  </div>
+                ))}
+                {!(data.expenseBreakdown || []).length && <p className="text-sm text-slate-400">Nenhuma despesa paga no período.</p>}
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-100">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Despesa</th>
+                      <th>Categoria</th>
+                      <th>Data usada no DRE</th>
+                      <th>Pagamento</th>
+                      <th className="text-right">Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.expenseDetails || []).map(item => (
+                      <tr key={item.id}>
+                        <td className="font-medium text-slate-800">{item.name}</td>
+                        <td>{item.categoryLabel}</td>
+                        <td>{item.paid_at ? String(item.paid_at).slice(0, 10).split('-').reverse().join('/') : 'Configuração mensal'}</td>
+                        <td>{item.paymentMethod}</td>
+                        <td className="text-right font-bold text-danger-600">{formatCurrency(item.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           <div className="card">
             <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
               <div>
                 <h3 className="font-display text-sm font-semibold text-slate-700">Tipos de venda de botijão</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Acompanhe venda normal com troca, venda de casco vazio e venda de cheio sem retorno.
-                </p>
+                <p className="text-xs text-slate-500 mt-1">Acompanhe venda normal com troca, venda de casco vazio e venda de cheio sem retorno.</p>
               </div>
               {bySaleKind?.historicalFullNoReturnQty > 0 && (
                 <div className="px-3 py-2 rounded-xl bg-slate-900 text-white text-right">
                   <p className="text-[11px] uppercase tracking-wide text-slate-300">Cheios sem retorno acumulado</p>
                   <p className="text-lg font-bold">{bySaleKind.fullNoReturnTotalWithHistory}</p>
-                  <p className="text-[11px] text-slate-300">
-                    inclui {bySaleKind.historicalFullNoReturnQty} histórico inicial
-                  </p>
+                  <p className="text-[11px] text-slate-300">inclui {bySaleKind.historicalFullNoReturnQty} histórico inicial</p>
                 </div>
               )}
             </div>
-
             <div className="grid sm:grid-cols-3 gap-3">
               {(bySaleKind?.items || []).map(item => (
                 <div key={item.type} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-slate-500">{item.name}</p>
-                      <p className="text-2xl font-bold text-slate-800 mt-1">{item.quantity}</p>
-                    </div>
-                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-500">
-                      {item.salesCount} vendas
-                    </span>
+                    <div><p className="text-xs uppercase tracking-wide text-slate-500">{item.name}</p><p className="text-2xl font-bold text-slate-800 mt-1">{item.quantity}</p></div>
+                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-500">{item.salesCount} vendas</span>
                   </div>
-                  <div className="mt-3 pt-3 border-t border-slate-200 flex justify-between text-sm">
-                    <span className="text-slate-500">Receita</span>
-                    <span className="font-semibold text-slate-700">{formatCurrency(item.revenue)}</span>
-                  </div>
+                  <div className="mt-3 pt-3 border-t border-slate-200 flex justify-between text-sm"><span className="text-slate-500">Receita</span><span className="font-semibold text-slate-700">{formatCurrency(item.revenue)}</span></div>
                 </div>
               ))}
             </div>
-
-            <div className="mt-4 p-3 rounded-lg border border-blue-100 bg-blue-50 text-xs text-blue-800">
-              <strong>Como usar:</strong> venda de casco vazio baixa vazios; cheio sem retorno baixa cheios sem gerar vazio; gás com troca segue a operação normal.
-            </div>
           </div>
 
-
-          {/* Gráficos lado a lado */}
           <div className="grid lg:grid-cols-2 gap-4">
-            {/* Por forma de pagamento */}
             <div className="card">
               <h3 className="font-display text-sm font-semibold text-slate-700 mb-4">Receita por Forma de Pagamento</h3>
-              {byPayment.length === 0 ? (
-                <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Sem dados</div>
-              ) : (
+              {byPayment.length === 0 ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Sem dados</div> : (
                 <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie data={byPayment} dataKey="total" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`}>
-                      {byPayment.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip formatter={v => formatCurrency(v)} />
-                  </PieChart>
+                  <PieChart><Pie data={byPayment} dataKey="total" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`}>{byPayment.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={v => formatCurrency(v)} /></PieChart>
                 </ResponsiveContainer>
               )}
             </div>
 
-            {/* Por maquininha */}
             <div className="card">
               <h3 className="font-display text-sm font-semibold text-slate-700 mb-4">Receita por Maquininha</h3>
-              {byMachine.length === 0 ? (
-                <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Nenhuma venda por maquininha no período</div>
-              ) : (
+              {byMachine.length === 0 ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Nenhuma venda por maquininha no período</div> : (
                 <div className="space-y-3">
                   {byMachine.map((m, i) => (
                     <div key={i} className="p-3 rounded-xl bg-slate-50 border border-slate-100">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-3 h-3 rounded-full ${
-                            m.color === 'black' ? 'bg-slate-800' :
-                            m.color === 'orange' ? 'bg-orange-500' :
-                            m.color === 'blue' ? 'bg-blue-500' : 'bg-slate-400'
-                          }`} />
-                          <span className="font-semibold text-sm text-slate-700">{m.name}</span>
-                        </div>
-                        <span className="font-bold text-slate-800">{formatCurrency(m.total)}</span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-xs text-slate-500">
-                        <span>{m.count} vendas</span>
-                        <span>Taxa est.: {formatCurrency(m.estimatedFee)}</span>
-                        <span className="text-success-600 font-medium">Líq.: {formatCurrency(m.netEstimated)}</span>
-                      </div>
+                      <div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><div className={`w-3 h-3 rounded-full ${m.color === 'black' ? 'bg-slate-800' : m.color === 'orange' ? 'bg-orange-500' : m.color === 'blue' ? 'bg-blue-500' : 'bg-slate-400'}`} /><span className="font-semibold text-sm text-slate-700">{m.name}</span></div><span className="font-bold text-slate-800">{formatCurrency(m.total)}</span></div>
+                      <div className="grid grid-cols-3 gap-2 text-xs text-slate-500"><span>{m.count} vendas</span><span>Taxa est.: {formatCurrency(m.estimatedFee)}</span><span className="text-success-600 font-medium">Líq.: {formatCurrency(m.netEstimated)}</span></div>
                     </div>
                   ))}
                 </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="card">
+              <h3 className="font-display text-sm font-semibold text-slate-700 mb-4">Vendas por canal — Rua x Portaria</h3>
+              {byChannel.length === 0 ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Sem vendas no período</div> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={byChannel}><XAxis dataKey="name" /><YAxis allowDecimals={false} /><Tooltip formatter={(v, name) => name === 'total' ? formatCurrency(v) : v} /><Bar dataKey="quantity" name="Botijões" fill="#2563eb" /><Bar dataKey="count" name="Vendas" fill="#f97316" /></BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+
+            <div className="card">
+              <h3 className="font-display text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2"><Truck className="w-4 h-4" /> Gás comprado / chegadas</h3>
+              {purchaseQty.length === 0 ? <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Nenhuma chegada no período</div> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={purchaseQty}><XAxis dataKey="name" /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="quantity" name="Quantidade comprada" fill="#22c55e" /></BarChart>
+                </ResponsiveContainer>
               )}
             </div>
           </div>
