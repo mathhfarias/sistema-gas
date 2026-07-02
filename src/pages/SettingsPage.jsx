@@ -124,7 +124,7 @@ export default function SettingsPage() {
         supabase.from('profiles').select('id, full_name, email, role, is_active, created_at, updated_at').eq('company_id', companyId).order('full_name', { ascending: true }),
         supabase.from('products').select('id, name, code, min_stock, is_active').eq('company_id', companyId).order('code', { ascending: true }),
         supabase.from('payment_methods').select('id, name, type, delivery_fee, has_delivery_fee, requires_machine, is_active').eq('company_id', companyId).order('name', { ascending: true }),
-        supabase.from('card_machines').select('id, name, provider, color, is_active').eq('company_id', companyId).order('name', { ascending: true }),
+        supabase.from('card_machines').select('id, name, provider, color, is_active, monthly_fee').eq('company_id', companyId).order('name', { ascending: true }),
         supabase.from('audit_logs').select('id, action, table_name, record_id, old_data, new_data, created_at, user_id').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
       ])
 
@@ -248,7 +248,7 @@ export default function SettingsPage() {
       )
 
       const machineUpdates = cardMachines.map(m =>
-        supabase.from('card_machines').update({ is_active: Boolean(m.is_active) }).eq('id', m.id)
+        supabase.from('card_machines').update({ is_active: Boolean(m.is_active), monthly_fee: Number(m.monthly_fee || 0) }).eq('id', m.id)
       )
 
       const updateResults = await Promise.all([...productUpdates, ...methodUpdates, ...machineUpdates])
@@ -260,7 +260,7 @@ export default function SettingsPage() {
         settings: settingsPayload,
         products: products.map(({ id, name, min_stock, is_active }) => ({ id, name, min_stock, is_active })),
         payment_methods: paymentMethods.map(({ id, name, delivery_fee, has_delivery_fee, is_active }) => ({ id, name, delivery_fee, has_delivery_fee, is_active })),
-        card_machines: cardMachines.map(({ id, name, is_active }) => ({ id, name, is_active })),
+        card_machines: cardMachines.map(({ id, name, is_active, monthly_fee }) => ({ id, name, is_active, monthly_fee })),
       })
 
       toast.success('Configurações salvas com sucesso')
@@ -662,20 +662,38 @@ export default function SettingsPage() {
             <div className="border-t border-slate-100 pt-4 space-y-2">
               <h4 className="text-sm font-semibold text-slate-700">Maquininhas</h4>
               {cardMachines.map(machine => (
-                <label key={machine.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2">
-                  <span>
-                    <span className="text-sm font-medium text-slate-700">{machine.name}</span>
-                    <span className="text-xs text-slate-400 block">{machine.provider || machine.color || 'Sem provedor'}</span>
-                  </span>
-                  <span className="text-xs text-slate-600 flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={machine.is_active !== false}
-                      onChange={e => updateMachine(machine.id, { is_active: e.target.checked })}
-                    />
-                    Ativa
-                  </span>
-                </label>
+                <div key={machine.id} className="rounded-xl border border-slate-100 px-3 py-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>
+                      <span className="text-sm font-medium text-slate-700">{machine.name}</span>
+                      <span className="text-xs text-slate-400 block">{machine.provider || machine.color || 'Sem provedor'}</span>
+                    </span>
+                    <label className="text-xs text-slate-600 flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={machine.is_active !== false}
+                        onChange={e => updateMachine(machine.id, { is_active: e.target.checked })}
+                      />
+                      Ativa
+                    </label>
+                  </div>
+                  <div>
+                    <label className="label">Valor mensal / taxa fixa</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">R$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="input pl-8"
+                        value={machine.monthly_fee ?? 0}
+                        onChange={e => updateMachine(machine.id, { monthly_fee: e.target.value })}
+                        aria-label={`Valor mensal da maquininha ${machine.name}`}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">Entra no DRE como custo fixo de maquininha do mês.</p>
+                  </div>
+                </div>
               ))}
             </div>
           </div>

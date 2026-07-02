@@ -162,6 +162,21 @@ export default function CalendarPage() {
   }, [companyId, filter.month, filter.year])
 
   useEffect(() => {
+    if (!companyId) return undefined
+
+    const channel = supabase
+      .channel(`calendar-sync-${companyId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses', filter: `company_id=eq.${companyId}` }, loadCalendar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_expenses', filter: `company_id=eq.${companyId}` }, loadCalendar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'calendar_events', filter: `company_id=eq.${companyId}` }, loadCalendar)
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [companyId, filter.month, filter.year])
+
+  useEffect(() => {
     const current = parseDateOnly(selectedDate)
     if (!current) return
     if (current.getFullYear() !== Number(filter.year) || current.getMonth() + 1 !== Number(filter.month)) {
@@ -378,6 +393,7 @@ export default function CalendarPage() {
               </select>
             </div>
             <button className="btn-outline" onClick={goToToday}>Hoje</button>
+            <button className="btn-outline" onClick={loadCalendar}>Atualizar</button>
           </div>
         </div>
       </div>
