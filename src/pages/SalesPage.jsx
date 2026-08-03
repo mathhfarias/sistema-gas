@@ -68,7 +68,12 @@ const DEFAULT_PAYMENT_SPLIT = {
 function formatSalePayments(sale) {
   if (sale?.sale_payments?.length) {
     return sale.sale_payments
-      .map(payment => `${payment.payment_methods?.name || 'Pagamento'} ${formatCurrency(payment.amount || 0)}`)
+      .map(payment => {
+        const installments = Number(payment.installments || 1)
+        const installmentLabel = installments > 1 ? ` ${installments}x` : ''
+        const netLabel = installments > 1 ? ` · líquido ${formatCurrency(payment.net_amount ?? payment.amount)}` : ''
+        return `${payment.payment_methods?.name || 'Pagamento'}${installmentLabel} ${formatCurrency(payment.amount || 0)}${netLabel}`
+      })
       .join(' + ')
   }
 
@@ -282,7 +287,9 @@ export function SalesPage() {
                   <td className="text-xs text-slate-500">
                     {(s.sale_items || []).map(i => `${i.quantity}x ${i.product_name}${i.sale_kind && i.sale_kind !== 'exchange' ? ` (${SALE_KIND_LABELS[i.sale_kind] || i.sale_kind})` : ''}`).join(', ')}
                   </td>
-                  <td className="text-xs">{formatSalePayments(s)}</td>
+                  <td className="text-xs">
+                    <span>{formatSalePayments(s)}</span>
+                  </td>
                   <td className="text-xs">{CHANNEL_LABELS[s.channel] || '—'}</td>
                   <td className="text-right text-xs currency">{formatCurrency(s.delivery_fee || 0)}</td>
                   <td className="text-right font-semibold currency">{formatCurrency(s.total)}</td>

@@ -1,6 +1,7 @@
 node_modules
 dist
 .env.local
+.env.example
 .env
 *.local
 .DS_Store

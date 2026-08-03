@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, Trash2, ShoppingCart, CheckCircle, Store, Truck, Clock } from 'lucide-react'
+import { PlusCircle, Trash2, ShoppingCart, CheckCircle, Store, Truck, Clock, CreditCard } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { salesService } from '../services/salesService'
 import { formatCurrency, parseCurrency, maskCurrency } from '../utils/format'
-import { PageHeader, Modal } from '../components/ui'
+import { PageHeader } from '../components/ui'
+import { CARD_BRAND_OPTIONS, cardBrandGroup, getStoredOrDefaultRate, nextBusinessDateISO, roundMoney } from '../utils/installmentRates'
 
 const DEFAULT_ITEM = {
   product_id: '', product_name: '', quantity: 1,
@@ -18,6 +19,14 @@ const DEFAULT_PAYMENT_SPLIT = {
   payment_method_id: '',
   card_machine_id: '',
   amount: '',
+}
+
+const DEFAULT_INSTALLMENT_PAYMENT = {
+  payment_method_id: '',
+  card_machine_id: '',
+  card_brand: 'visa',
+  installments: 2,
+  fee_percentage: '',
 }
 
 const DEFAULT_GAS_POVO_SALE_PRICE = 100.23
@@ -58,6 +67,7 @@ export default function NewSalePage() {
   const [products, setProducts] = useState([])
   const [paymentMethods, setPaymentMethods] = useState([])
   const [cardMachines, setCardMachines] = useState([])
+  const [cardMachineRates, setCardMachineRates] = useState([])
   const [customers, setCustomers] = useState([])
   const [settings, setSettings] = useState({ gas_povo_delivery_fee: 20 })
 
@@ -66,7 +76,9 @@ export default function NewSalePage() {
   const [paymentMethodId, setPaymentMethodId] = useState('')
   const [cardMachineId, setCardMachineId] = useState('')
   const [isSplitPayment, setIsSplitPayment] = useState(false)
+  const [isInstallmentPayment, setIsInstallmentPayment] = useState(false)
   const [paymentSplits, setPaymentSplits] = useState([{ ...DEFAULT_PAYMENT_SPLIT }])
+  const [installmentPayment, setInstallmentPayment] = useState({ ...DEFAULT_INSTALLMENT_PAYMENT })
   const [customerId, setCustomerId] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [discount, setDiscount] = useState('')
@@ -79,24 +91,26 @@ export default function NewSalePage() {
   }, [companyId])
 
   async function loadData() {
-    const [prodRes, pmRes, cmRes, custRes, settRes] = await Promise.all([
+    const [prodRes, pmRes, cmRes, rateRes, custRes, settRes] = await Promise.all([
       supabase.from('products').select('*').eq('company_id', companyId).eq('is_active', true),
       supabase.from('payment_methods').select('*').eq('company_id', companyId).eq('is_active', true),
       supabase.from('card_machines').select('*').eq('company_id', companyId).eq('is_active', true),
+      supabase.from('card_machine_rates').select('*').eq('company_id', companyId).eq('is_active', true),
       supabase.from('customers').select('id, name, type, code, default_payment_method_id, default_product').eq('company_id', companyId).eq('is_active', true).order('name'),
       supabase.from('settings').select('*').eq('company_id', companyId).single(),
     ])
     setProducts(prodRes.data || [])
     setPaymentMethods(pmRes.data || [])
     setCardMachines(cmRes.data || [])
+    setCardMachineRates(rateRes.data || [])
     setCustomers(custRes.data || [])
     if (settRes.data) setSettings(settRes.data)
   }
 
   const selectedPM = paymentMethods.find(p => p.id === paymentMethodId)
-  const isGasPovo = !isSplitPayment && selectedPM?.type === 'gas_povo'
-  const isValeHub = !isSplitPayment && selectedPM?.type === 'vale_hub'
-  const requiresMachine = !isSplitPayment && selectedPM?.requires_machine && !isValeHub
+  const isGasPovo = !isSplitPayment && !isInstallmentPayment && selectedPM?.type === 'gas_povo'
+  const isValeHub = !isSplitPayment && !isInstallmentPayment && selectedPM?.type === 'vale_hub'
+  const requiresMachine = !isSplitPayment && !isInstallmentPayment && selectedPM?.requires_machine && !isValeHub
   const deliveryFee = isGasPovo && channel === 'street' ? Number(settings.gas_povo_delivery_fee || 0) : 0
 
   const subtotal = items.reduce((s, i) => s + parseCurrency(i.unit_price) * (i.quantity || 1), 0)
@@ -105,8 +119,40 @@ export default function NewSalePage() {
   const splitPaidTotal = paymentSplits.reduce((sum, split) => sum + parseCurrency(split.amount), 0)
   const splitRemaining = total - splitPaidTotal
 
-  function getProductSalePrice(prod, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub, saleKind = 'exchange') {
+  const creditPaymentMethods = paymentMethods.filter(method => method.type === 'credit' && method.requires_machine)
+  const selectedInstallmentMachine = cardMachines.find(machine => machine.id === installmentPayment.card_machine_id)
+  const recommendedInstallmentRate = getStoredOrDefaultRate({
+    rates: cardMachineRates,
+    machine: selectedInstallmentMachine,
+    cardBrand: installmentPayment.card_brand,
+    installments: installmentPayment.installments,
+  })
+  const installmentFeePercentage = parseCurrency(installmentPayment.fee_percentage)
+  const installmentFeeAmount = roundMoney(total * installmentFeePercentage / 100)
+  const installmentNetAmount = roundMoney(total - installmentFeeAmount)
+  const installmentValue = roundMoney(total / Number(installmentPayment.installments || 1))
+  const expectedReceiptDate = nextBusinessDateISO(now, recommendedInstallmentRate.receiptDays || 1)
+
+  useEffect(() => {
+    if (!isInstallmentPayment || !installmentPayment.card_machine_id) return
+    setInstallmentPayment(prev => ({
+      ...prev,
+      fee_percentage: Number(recommendedInstallmentRate.percentage || 0).toFixed(2).replace('.', ','),
+    }))
+  }, [
+    isInstallmentPayment,
+    installmentPayment.card_machine_id,
+    installmentPayment.card_brand,
+    installmentPayment.installments,
+    recommendedInstallmentRate.percentage,
+  ])
+
+  function getProductSalePrice(prod, gasPovo = isGasPovo, saleChannel = channel, valeHub = isValeHub, saleKind = 'exchange', installmentMode = isInstallmentPayment) {
     if (!prod) return 0
+    const isP13 = String(prod.code || '').trim().toUpperCase() === 'P13'
+    if (installmentMode && saleChannel === 'counter' && isP13 && saleKind === 'exchange') {
+      return Number(settings?.extra?.counter_p13_installment_price ?? 125)
+    }
     if (saleKind === 'empty_cylinder') return Number(prod.empty_cylinder_sale_price ?? DEFAULT_EMPTY_CYLINDER_SALE_PRICE)
     if (saleKind === 'full_no_return') return Number(prod.full_no_return_sale_price ?? DEFAULT_FULL_NO_RETURN_SALE_PRICE)
     if (gasPovo) return Number(prod.gas_povo_sale_price ?? DEFAULT_GAS_POVO_SALE_PRICE)
@@ -123,21 +169,51 @@ export default function NewSalePage() {
     return !!method?.requires_machine && method?.type !== 'vale_hub'
   }
 
-  function setSplitPayment(enabled) {
-    setIsSplitPayment(enabled)
-    setPaymentMethodId('')
-    setCardMachineId('')
-    setPaymentSplits([{ ...DEFAULT_PAYMENT_SPLIT }])
-
+  function resetSpecialPaymentItems(installmentMode = false) {
     setItems(prev => prev.map(item => {
       const prod = products.find(p => p.id === item.product_id)
       if (!prod) return item
       return {
         ...item,
         sale_kind: item.sale_kind || 'exchange',
-        unit_price: moneyToInput(getProductSalePrice(prod, false, channel, false, item.sale_kind || 'exchange')),
+        unit_price: moneyToInput(getProductSalePrice(prod, false, channel, false, item.sale_kind || 'exchange', installmentMode)),
       }
     }))
+  }
+
+  function setSplitPayment(enabled) {
+    setIsSplitPayment(enabled)
+    setIsInstallmentPayment(false)
+    setPaymentMethodId('')
+    setCardMachineId('')
+    setPaymentSplits([{ ...DEFAULT_PAYMENT_SPLIT }])
+    setInstallmentPayment({ ...DEFAULT_INSTALLMENT_PAYMENT })
+    resetSpecialPaymentItems(false)
+  }
+
+  function setInstallmentPaymentMode(enabled) {
+    setIsInstallmentPayment(enabled)
+    setIsSplitPayment(false)
+    setPaymentMethodId('')
+    setCardMachineId('')
+    setPaymentSplits([{ ...DEFAULT_PAYMENT_SPLIT }])
+
+    if (enabled) {
+      const defaultMethod = creditPaymentMethods[0]
+      const infiniteMachine = cardMachines.find(machine => {
+        const text = `${machine.name || ''} ${machine.provider || ''} ${machine.brand || ''}`.toLowerCase()
+        return text.includes('infinite') || text.includes('cloudwalk')
+      })
+      setInstallmentPayment({
+        ...DEFAULT_INSTALLMENT_PAYMENT,
+        payment_method_id: defaultMethod?.id || '',
+        card_machine_id: infiniteMachine?.id || cardMachines[0]?.id || '',
+      })
+    } else {
+      setInstallmentPayment({ ...DEFAULT_INSTALLMENT_PAYMENT })
+    }
+
+    resetSpecialPaymentItems(enabled)
   }
 
   function setPaymentSplit(index, field, value) {
@@ -267,13 +343,15 @@ export default function NewSalePage() {
     const cust = customers.find(c => c.id === id)
     if (cust) {
       setCustomerName(cust.name)
-      if (cust.default_payment_method_id) handlePaymentMethodChange(cust.default_payment_method_id)
+      if (cust.default_payment_method_id && !isSplitPayment && !isInstallmentPayment) {
+        handlePaymentMethodChange(cust.default_payment_method_id)
+      }
     }
   }
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (!isSplitPayment && !paymentMethodId) { toast.error('Selecione a forma de pagamento'); return }
+    if (!isSplitPayment && !isInstallmentPayment && !paymentMethodId) { toast.error('Selecione a forma de pagamento'); return }
     if (items.some(i => !i.product_id)) { toast.error('Selecione o produto em todos os itens'); return }
     if (requiresMachine && !cardMachineId) { toast.error('Selecione a maquininha'); return }
     if (isSplitPayment) {
@@ -284,6 +362,13 @@ export default function NewSalePage() {
       if (missingMachine) { toast.error('Selecione a maquininha para o pagamento com cartão.'); return }
       const hasSpecial = validSplits.some(split => ['gas_povo', 'vale_hub'].includes(getPaymentMethodById(split.payment_method_id)?.type))
       if (hasSpecial) { toast.error('Pagamento dividido não deve usar Gás do Povo ou Vale Hub.'); return }
+    }
+    if (isInstallmentPayment) {
+      if (!installmentPayment.payment_method_id) { toast.error('Selecione a forma de pagamento no crédito.'); return }
+      if (!installmentPayment.card_machine_id) { toast.error('Selecione a maquininha da venda parcelada.'); return }
+      if (Number(installmentPayment.installments || 1) < 2) { toast.error('Selecione pelo menos 2 parcelas.'); return }
+      if (installmentFeePercentage <= 0) { toast.error('Informe a taxa cobrada pela maquininha.'); return }
+      if (total <= 0) { toast.error('O total da venda precisa ser maior que zero.'); return }
     }
     if (isValeHub && items.some(i => i.sale_kind !== 'exchange')) { toast.error('Vale Hub / Ultragaz só deve ser usado em venda com troca.'); return }
     if (isGasPovo) {
@@ -299,8 +384,12 @@ export default function NewSalePage() {
       company_id: companyId,
       customer_id: customerId || null,
       customer_name: customerName || 'Venda avulsa',
-      payment_method_id: isSplitPayment ? paymentSplits.find(split => split.payment_method_id)?.payment_method_id : paymentMethodId,
-      card_machine_id: isSplitPayment ? (paymentSplits.find(split => split.payment_method_id)?.card_machine_id || null) : (cardMachineId || null),
+      payment_method_id: isSplitPayment
+        ? paymentSplits.find(split => split.payment_method_id)?.payment_method_id
+        : isInstallmentPayment ? installmentPayment.payment_method_id : paymentMethodId,
+      card_machine_id: isSplitPayment
+        ? (paymentSplits.find(split => split.payment_method_id)?.card_machine_id || null)
+        : isInstallmentPayment ? installmentPayment.card_machine_id : (cardMachineId || null),
       payment_splits: isSplitPayment
         ? paymentSplits
             .filter(split => split.payment_method_id && parseCurrency(split.amount) > 0)
@@ -309,7 +398,24 @@ export default function NewSalePage() {
               card_machine_id: split.card_machine_id || null,
               amount: parseCurrency(split.amount),
             }))
-        : [{ payment_method_id: paymentMethodId, card_machine_id: cardMachineId || null, amount: total }],
+        : isInstallmentPayment
+          ? [{
+              payment_method_id: installmentPayment.payment_method_id,
+              card_machine_id: installmentPayment.card_machine_id,
+              amount: total,
+              installments: Number(installmentPayment.installments || 2),
+              card_brand: installmentPayment.card_brand,
+              card_brand_group: cardBrandGroup(installmentPayment.card_brand),
+              fee_percentage: installmentFeePercentage,
+              fee_amount: installmentFeeAmount,
+              net_amount: installmentNetAmount,
+              receipt_plan: '1_business_day',
+              expected_receipt_date: expectedReceiptDate,
+              rate_source: recommendedInstallmentRate.source,
+              receipt_days: recommendedInstallmentRate.receiptDays || 1,
+              card_machine_rate_id: recommendedInstallmentRate.rateId,
+            }]
+          : [{ payment_method_id: paymentMethodId, card_machine_id: cardMachineId || null, amount: total }],
       channel,
       items: items.map(i => ({
         ...i,
@@ -335,7 +441,9 @@ export default function NewSalePage() {
       setPaymentMethodId('')
       setCardMachineId('')
       setIsSplitPayment(false)
+      setIsInstallmentPayment(false)
       setPaymentSplits([{ ...DEFAULT_PAYMENT_SPLIT }])
+      setInstallmentPayment({ ...DEFAULT_INSTALLMENT_PAYMENT })
       setCustomerId('')
       setCustomerName('')
       setDiscount('')
@@ -543,18 +651,28 @@ export default function NewSalePage() {
 
         {/* Pagamento */}
         <div className="card">
-          <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
             <h3 className="font-semibold text-sm text-slate-600">Pagamento</h3>
-            <button
-              type="button"
-              className={`btn-sm ${isSplitPayment ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => setSplitPayment(!isSplitPayment)}
-            >
-              {isSplitPayment ? 'Pagamento dividido ativo' : 'Dividir pagamento'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`btn-sm ${isSplitPayment ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setSplitPayment(!isSplitPayment)}
+              >
+                {isSplitPayment ? 'Pagamento dividido ativo' : 'Dividir pagamento'}
+              </button>
+              <button
+                type="button"
+                className={`btn-sm ${isInstallmentPayment ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setInstallmentPaymentMode(!isInstallmentPayment)}
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                {isInstallmentPayment ? 'Parcelamento ativo' : 'Parcelar pagamento'}
+              </button>
+            </div>
           </div>
 
-          {!isSplitPayment ? (
+          {!isSplitPayment && !isInstallmentPayment ? (
             <div className="grid sm:grid-cols-2 gap-3">
               <div className="form-group">
                 <label className="label">Forma de pagamento *</label>
@@ -572,6 +690,103 @@ export default function NewSalePage() {
                   </select>
                 </div>
               )}
+            </div>
+          ) : isInstallmentPayment ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-800 flex items-start gap-2">
+                <CreditCard className="w-4 h-4 mt-0.5 shrink-0" />
+                <div>
+                  <strong>Crédito parcelado — recebimento em 1 dia útil.</strong>
+                  <p className="text-xs mt-1 text-blue-700">A taxa é descontada pela operadora. O total da venda continua sendo o valor pago pelo cliente.</p>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="form-group">
+                  <label className="label">Forma de pagamento *</label>
+                  <select
+                    className="input"
+                    value={installmentPayment.payment_method_id}
+                    onChange={e => setInstallmentPayment(prev => ({ ...prev, payment_method_id: e.target.value }))}
+                    required
+                  >
+                    <option value="">Selecionar crédito...</option>
+                    {creditPaymentMethods.map(pm => <option key={pm.id} value={pm.id}>{pm.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Maquininha *</label>
+                  <select
+                    className="input"
+                    value={installmentPayment.card_machine_id}
+                    onChange={e => setInstallmentPayment(prev => ({ ...prev, card_machine_id: e.target.value }))}
+                    required
+                  >
+                    <option value="">Selecionar...</option>
+                    {cardMachines.map(cm => <option key={cm.id} value={cm.id}>{cm.name} ({cm.provider || cm.brand || 'maquininha'})</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Bandeira *</label>
+                  <select
+                    className="input"
+                    value={installmentPayment.card_brand}
+                    onChange={e => setInstallmentPayment(prev => ({ ...prev, card_brand: e.target.value }))}
+                  >
+                    {CARD_BRAND_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Parcelas *</label>
+                  <select
+                    className="input"
+                    value={installmentPayment.installments}
+                    onChange={e => setInstallmentPayment(prev => ({ ...prev, installments: Number(e.target.value) }))}
+                  >
+                    {Array.from({ length: 11 }, (_, index) => index + 2).map(count => (
+                      <option key={count} value={count}>{count}x de {formatCurrency(roundMoney(total / count))}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-[180px] gap-3 items-end">
+                <div className="form-group">
+                  <label className="label">Taxa da operadora (%) *</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      className="input pr-8"
+                      value={installmentPayment.fee_percentage}
+                      onChange={e => setInstallmentPayment(prev => ({ ...prev, fee_percentage: maskCurrency(e.target.value.replace(/\D/g, '')) }))}
+                      placeholder="0,00"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs text-slate-500">Cliente paga</p>
+                  <p className="font-display font-bold text-slate-900 mt-1">{formatCurrency(total)}</p>
+                  <p className="text-xs text-slate-500 mt-1">{installmentPayment.installments}x de {formatCurrency(installmentValue)}</p>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs text-amber-700">Taxa ({installmentFeePercentage.toFixed(2)}%)</p>
+                  <p className="font-display font-bold text-amber-800 mt-1">-{formatCurrency(installmentFeeAmount)}</p>
+                </div>
+                <div className="rounded-xl border border-success-200 bg-success-50 p-3">
+                  <p className="text-xs text-success-700">Crédito líquido</p>
+                  <p className="font-display font-bold text-success-800 mt-1">{formatCurrency(installmentNetAmount)}</p>
+                </div>
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-xs text-blue-700">Previsão do crédito</p>
+                  <p className="font-display font-bold text-blue-800 mt-1">{expectedReceiptDate ? expectedReceiptDate.split('-').reverse().join('/') : '—'}</p>
+                  <p className="text-[11px] text-blue-600 mt-1">Próximo dia útil, sem considerar feriados.</p>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -700,6 +915,18 @@ export default function NewSalePage() {
                 <span>Pago no dividido</span>
                 <span>{formatCurrency(splitPaidTotal)}</span>
               </div>
+            )}
+            {isInstallmentPayment && (
+              <>
+                <div className="flex justify-between text-amber-300">
+                  <span>Taxa da maquininha ({installmentFeePercentage.toFixed(2)}%)</span>
+                  <span>-{formatCurrency(installmentFeeAmount)}</span>
+                </div>
+                <div className="flex justify-between text-emerald-300">
+                  <span>Líquido a receber</span>
+                  <span>{formatCurrency(installmentNetAmount)}</span>
+                </div>
+              </>
             )}
             <div className="border-t border-slate-700 pt-2 flex justify-between text-lg font-bold">
               <span>Total</span>
