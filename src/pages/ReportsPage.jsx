@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt, Truck } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt, Truck, CreditCard, GitFork } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { financialService } from '../services/financialService'
 import { PageHeader, PageLoader, StatCard } from '../components/ui'
@@ -101,10 +101,24 @@ export default function ReportsPage() {
         <div className="text-center py-12 text-slate-400">Nenhum dado encontrado para o período.</div>
       ) : (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
             <StatCard title="Receita Bruta" value={formatCurrency(data.grossRevenue)} icon={DollarSign} color="blue" />
             <StatCard title="Custo de Produtos" value={formatCurrency(data.cogs)} icon={ShoppingCart} color="orange" />
-            <StatCard title="Despesas + Maquininhas" value={formatCurrency(data.totalOperatingExpenses)} icon={Receipt} color="yellow" />
+            <StatCard title="Despesas + Taxas" value={formatCurrency(data.totalOperatingExpenses)} icon={Receipt} color="yellow" />
+            <StatCard
+              title="Pagamentos Divididos"
+              value={String(data.splitPaymentSalesCount || 0)}
+              subtitle={`${formatCurrency(data.splitPaymentGrossAmount || 0)} em vendas com 2+ formas`}
+              icon={GitFork}
+              color="cyan"
+            />
+            <StatCard
+              title="Vendas Parceladas"
+              value={String(data.installmentSalesCount || 0)}
+              subtitle={`${formatCurrency(data.installmentGrossAmount || 0)} bruto · ${formatCurrency(data.installmentNetAmount || 0)} líquido`}
+              icon={CreditCard}
+              color="purple"
+            />
             <StatCard title="Lucro Líquido" value={formatCurrency(data.netProfit)} subtitle={`margem ${data.netMargin?.toFixed(1)}%`} icon={data.netProfit >= 0 ? TrendingUp : TrendingDown} color={data.netProfit >= 0 ? 'green' : 'red'} />
           </div>
 
@@ -118,6 +132,7 @@ export default function ReportsPage() {
                 { label: '= Lucro Bruto', value: data.grossProfit, type: 'total', margin: data.grossMargin },
                 { label: '(-) Despesas pagas', value: -data.totalPaidExpenses, type: 'cost' },
                 { label: '(-) Mensalidade das maquininhas', value: -data.machineMonthlyFees, type: 'cost' },
+                { label: '(-) Taxas das vendas parceladas', value: -data.installmentFees, type: 'cost' },
                 { label: '= Lucro Líquido', value: data.netProfit, type: 'result', margin: data.netMargin },
               ].map((row, i) => (
                 <div key={i} className={`flex justify-between items-center py-2 px-3 rounded-lg ${row.type === 'result' ? 'bg-slate-900 text-white font-bold text-base' : row.type === 'total' ? 'bg-slate-100 font-semibold' : row.type === 'sub' ? 'pl-6 text-slate-500 text-sm' : ''}`}>
@@ -232,7 +247,12 @@ export default function ReportsPage() {
                   {byMachine.map((m, i) => (
                     <div key={i} className="p-3 rounded-xl bg-slate-50 border border-slate-100">
                       <div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><div className={`w-3 h-3 rounded-full ${m.color === 'black' ? 'bg-slate-800' : m.color === 'orange' ? 'bg-orange-500' : m.color === 'blue' ? 'bg-blue-500' : 'bg-slate-400'}`} /><span className="font-semibold text-sm text-slate-700">{m.name}</span></div><span className="font-bold text-slate-800">{formatCurrency(m.total)}</span></div>
-                      <div className="grid grid-cols-3 gap-2 text-xs text-slate-500"><span>{m.count} vendas</span><span>Taxa est.: {formatCurrency(m.estimatedFee)}</span><span className="text-success-600 font-medium">Líq.: {formatCurrency(m.netEstimated)}</span></div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-slate-500">
+                        <span>{m.count} vendas</span>
+                        <span>{m.installmentCount || 0} parceladas</span>
+                        <span>Taxas: {formatCurrency(m.estimatedFee)}</span>
+                        <span className="text-success-600 font-medium">Líq.: {formatCurrency(m.netEstimated)}</span>
+                      </div>
                     </div>
                   ))}
                 </div>

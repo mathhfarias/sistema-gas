@@ -265,3 +265,24 @@ Para dúvidas sobre configuração do Supabase ou Netlify, consulte a documenta�
 - [Supabase Docs](https://supabase.com/docs)
 - [Netlify Docs](https://docs.netlify.com)
 - [Vite Docs](https://vitejs.dev)
+
+---
+
+## Venda parcelada / InfinitePay
+
+A versão de 03/08/2026 inclui parcelamento no cartão, cálculo da taxa e valor líquido, além do box de vendas parceladas nos relatórios.
+
+Antes de usar, execute no Supabase:
+
+```text
+EXECUTAR_NO_SUPABASE_ANTES.sql
+```
+
+Para testar localmente:
+
+```bash
+npm install
+npm start
+```
+
+Consulte `TESTE_LOCAL_PASSO_A_PASSO.md` para o checklist completo.

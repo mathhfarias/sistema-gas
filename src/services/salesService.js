@@ -62,23 +62,56 @@ function aggregateSaleStock(items, multiplier = 1, paymentType = 'other') {
 }
 
 
+function roundMoney(value) {
+  return Math.round((normalizeMoney(value) + Number.EPSILON) * 100) / 100
+}
+
+function normalizePaymentSplit(split = {}) {
+  const amount = Math.max(0, roundMoney(split.amount))
+  const installments = Math.max(1, Math.min(12, normalizeQuantity(split.installments || 1)))
+  const rawPercentage = Number(split.fee_percentage || 0)
+  const feePercentage = Number.isFinite(rawPercentage) ? Math.max(0, rawPercentage) : 0
+  const calculatedFee = roundMoney(amount * feePercentage / 100)
+  const rawFeeAmount = split.fee_amount === undefined || split.fee_amount === null
+    ? calculatedFee
+    : roundMoney(split.fee_amount)
+  const feeAmount = Math.max(0, rawFeeAmount)
+  const rawNetAmount = split.net_amount === undefined || split.net_amount === null
+    ? roundMoney(amount - feeAmount)
+    : roundMoney(split.net_amount)
+  const netAmount = Number.isFinite(rawNetAmount) ? Math.max(0, rawNetAmount) : 0
+
+  return {
+    payment_method_id: split.payment_method_id || '',
+    card_machine_id: split.card_machine_id || null,
+    amount,
+    installments,
+    card_brand: split.card_brand || null,
+    card_brand_group: split.card_brand_group || null,
+    fee_percentage: feePercentage,
+    fee_amount: feeAmount,
+    net_amount: netAmount,
+    receipt_plan: split.receipt_plan || (installments > 1 ? '1_business_day' : 'standard'),
+    expected_receipt_date: split.expected_receipt_date || null,
+    rate_source: split.rate_source || null,
+    receipt_days: Math.max(0, normalizeQuantity(split.receipt_days || 0)),
+    card_machine_rate_id: split.card_machine_rate_id || null,
+  }
+}
+
 function normalizePaymentSplits(payment_splits, total = 0, fallback = {}) {
   const cleaned = (payment_splits || [])
-    .map(split => ({
-      payment_method_id: split.payment_method_id || '',
-      card_machine_id: split.card_machine_id || null,
-      amount: normalizeMoney(split.amount),
-    }))
+    .map(normalizePaymentSplit)
     .filter(split => split.payment_method_id && split.amount > 0)
 
   if (cleaned.length) return cleaned
 
   if (fallback.payment_method_id) {
-    return [{
+    return [normalizePaymentSplit({
       payment_method_id: fallback.payment_method_id,
       card_machine_id: fallback.card_machine_id || null,
       amount: normalizeMoney(total),
-    }]
+    })]
   }
 
   return []
@@ -125,6 +158,28 @@ function validatePaymentSplits(paymentSplits, total, enrichedSplits = []) {
     if (split.payment_method?.requires_machine && !split.card_machine_id && split.payment_method?.type !== 'vale_hub') {
       return { error: { message: `Selecione a maquininha para ${split.payment_method?.name || 'pagamento com cartão'}.` } }
     }
+
+    if (Number(split.installments || 1) > 1) {
+      if (split.payment_method?.type !== 'credit') {
+        return { error: { message: 'Venda parcelada deve usar uma forma de pagamento do tipo crédito.' } }
+      }
+      if (!split.card_machine_id) {
+        return { error: { message: 'Selecione a maquininha da venda parcelada.' } }
+      }
+      const feePercentage = Number(split.fee_percentage || 0)
+      const feeAmount = Number(split.fee_amount || 0)
+      const amount = Number(split.amount || 0)
+      const netAmount = Number(split.net_amount || 0)
+      if (feePercentage <= 0 || feePercentage >= 100) {
+        return { error: { message: 'Informe uma taxa percentual válida para a venda parcelada.' } }
+      }
+      if (feeAmount < 0 || feeAmount > amount) {
+        return { error: { message: 'O valor da taxa da maquininha é inválido.' } }
+      }
+      if (netAmount < 0 || netAmount > amount || Math.abs((amount - feeAmount) - netAmount) > 0.01) {
+        return { error: { message: 'O valor líquido da venda parcelada está inconsistente com a taxa.' } }
+      }
+    }
   }
 
   const specialPayments = enrichedSplits.filter(split => ['gas_povo', 'vale_hub'].includes(split.payment_method?.type))
@@ -146,8 +201,55 @@ function buildSalePayments(saleId, companyId, paymentSplits) {
     company_id: companyId,
     payment_method_id: split.payment_method_id,
     card_machine_id: split.card_machine_id || null,
-    amount: normalizeMoney(split.amount),
+    amount: roundMoney(split.amount),
+    installments: Number(split.installments || 1),
+    card_brand: split.card_brand || null,
+    card_brand_group: split.card_brand_group || null,
+    fee_percentage: Number(split.fee_percentage || 0),
+    fee_amount: roundMoney(split.fee_amount || 0),
+    net_amount: roundMoney(split.net_amount ?? (normalizeMoney(split.amount) - normalizeMoney(split.fee_amount))),
+    receipt_plan: split.receipt_plan || 'standard',
+    expected_receipt_date: split.expected_receipt_date || null,
+    rate_source: split.rate_source || null,
+    receipt_days: Math.max(0, normalizeQuantity(split.receipt_days || 0)),
+    card_machine_rate_id: split.card_machine_rate_id || null,
   }))
+}
+
+function preserveExistingInstallmentMetadata(newPayments, oldPayments = [], rawPaymentSplits = []) {
+  const metadataKeys = [
+    'installments', 'card_brand', 'card_brand_group', 'fee_percentage', 'fee_amount', 'net_amount',
+    'receipt_plan', 'expected_receipt_date', 'rate_source', 'receipt_days', 'card_machine_rate_id',
+  ]
+  const metadataWasSent = (rawPaymentSplits || []).some(payment =>
+    metadataKeys.some(key => Object.prototype.hasOwnProperty.call(payment || {}, key))
+  )
+
+  if (metadataWasSent || newPayments.length !== 1 || oldPayments.length !== 1) return newPayments
+
+  const current = newPayments[0]
+  const old = oldPayments[0]
+  const sameMethod = current.payment_method_id === old.payment_method_id
+  const sameMachine = (current.card_machine_id || null) === (old.card_machine_id || null)
+
+  if (!sameMethod || !sameMachine || Number(old.installments || 1) <= 1) return newPayments
+
+  const percentage = Number(old.fee_percentage || 0)
+  const feeAmount = roundMoney(current.amount * percentage / 100)
+  return [{
+    ...current,
+    installments: Number(old.installments || 1),
+    card_brand: old.card_brand || null,
+    card_brand_group: old.card_brand_group || null,
+    fee_percentage: percentage,
+    fee_amount: feeAmount,
+    net_amount: roundMoney(current.amount - feeAmount),
+    receipt_plan: old.receipt_plan || '1_business_day',
+    expected_receipt_date: old.expected_receipt_date || null,
+    rate_source: old.rate_source || null,
+    receipt_days: Number(old.receipt_days || 1),
+    card_machine_rate_id: old.card_machine_rate_id || null,
+  }]
 }
 
 function combineStockMovements(...movementGroups) {
@@ -362,7 +464,7 @@ export const salesService = {
 
     const { data: oldSale, error: oldSaleError } = await supabase
       .from('sales')
-      .select('id, sale_number, status, payment_methods(type), sale_payments(payment_method_id, card_machine_id, amount, payment_methods(type, name, requires_machine))')
+      .select('id, sale_number, status, payment_methods(type), sale_payments(payment_method_id, card_machine_id, amount, installments, card_brand, card_brand_group, fee_percentage, fee_amount, net_amount, receipt_plan, expected_receipt_date, rate_source, receipt_days, card_machine_rate_id, payment_methods(type, name, requires_machine))')
       .eq('id', saleId)
       .eq('company_id', company_id)
       .single()
@@ -382,7 +484,8 @@ export const salesService = {
     const normalizedNewItems = buildSaleItems(saleId, items)
     const { subtotal, total } = calculateSaleTotals(normalizedNewItems, delivery_fee, discount)
 
-    const normalizedPayments = normalizePaymentSplits(payment_splits, total, { payment_method_id, card_machine_id })
+    let normalizedPayments = normalizePaymentSplits(payment_splits, total, { payment_method_id, card_machine_id })
+    normalizedPayments = preserveExistingInstallmentMetadata(normalizedPayments, oldSale.sale_payments || [], payment_splits)
     const paymentInfo = await enrichPaymentSplits(normalizedPayments)
     if (paymentInfo.error) return { error: paymentInfo.error }
 
@@ -480,7 +583,7 @@ export const salesService = {
         *,
         payment_methods(name, type, requires_machine),
         card_machines(name, color),
-        sale_payments(amount, payment_method_id, card_machine_id, payment_methods(name, type, requires_machine), card_machines(name, color)),
+        sale_payments(amount, payment_method_id, card_machine_id, installments, card_brand, card_brand_group, fee_percentage, fee_amount, net_amount, receipt_plan, expected_receipt_date, rate_source, receipt_days, card_machine_rate_id, payment_methods(name, type, requires_machine), card_machines(name, color)),
         sale_items(*, products(name, code, sale_price, street_sale_price, gas_povo_sale_price, empty_cylinder_sale_price, full_no_return_sale_price, cost_price, is_cylinder)),
         profiles(full_name)
       `)

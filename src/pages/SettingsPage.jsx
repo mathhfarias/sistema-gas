@@ -12,6 +12,8 @@ import { ROLE_OPTIONS, ROLE_DESCRIPTIONS } from '../utils/permissions'
 
 const DEFAULT_EXTRA = {
   full_no_return_initial_qty: 69,
+  counter_p13_installment_price: 125,
+  installment_rate_notice: 'Taxas InfinitePay configuradas conforme o plano vigente. Revise as taxas sempre que a operadora alterar as condições comerciais.',
   require_cancel_sale_reason: true,
   require_stock_adjustment_reason: true,
   require_purchase_delete_reason: true,
@@ -79,6 +81,8 @@ export default function SettingsPage() {
   const [gasPovoFee, setGasPovoFee] = useState('20,00')
   const [lowStockQty, setLowStockQty] = useState(35)
   const [fullNoReturnInitialQty, setFullNoReturnInitialQty] = useState(69)
+  const [counterP13InstallmentPrice, setCounterP13InstallmentPrice] = useState('125,00')
+  const [installmentRateNotice, setInstallmentRateNotice] = useState(DEFAULT_EXTRA.installment_rate_notice)
   const [settingsExtra, setSettingsExtra] = useState(DEFAULT_EXTRA)
 
   const [users, setUsers] = useState([])
@@ -146,6 +150,8 @@ export default function SettingsPage() {
         setLowStockQty(Number(s.low_stock_alert_qty ?? 35))
         setSettingsExtra(extra)
         setFullNoReturnInitialQty(Number(extra.full_no_return_initial_qty ?? 69))
+        setCounterP13InstallmentPrice(Number(extra.counter_p13_installment_price ?? 125).toFixed(2).replace('.', ','))
+        setInstallmentRateNotice(extra.installment_rate_notice || DEFAULT_EXTRA.installment_rate_notice)
       } else {
         setSettingsId(null)
         setSettingsExtra(DEFAULT_EXTRA)
@@ -187,6 +193,8 @@ export default function SettingsPage() {
       ...(settingsExtra || {}),
       full_no_return_initial_qty: Number(fullNoReturnInitialQty || 0),
       block_sale_edit_after_days: Number(settingsExtra?.block_sale_edit_after_days || 0),
+      counter_p13_installment_price: parseCurrency(counterP13InstallmentPrice),
+      installment_rate_notice: installmentRateNotice.trim(),
     }
 
     try {
@@ -438,6 +446,17 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="form-group">
+              <label className="label">P13 na Portaria — cartão parcelado (R$)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                <input type="text" inputMode="numeric" className="input pl-8"
+                  value={counterP13InstallmentPrice}
+                  onChange={e => setCounterP13InstallmentPrice(maskCurrency(e.target.value.replace(/\D/g,'')))}
+                />
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Aplicado automaticamente ao selecionar Portaria + P13 + Parcelamento.</p>
+            </div>
+            <div className="form-group">
               <label className="label">Alerta geral de estoque baixo</label>
               <input type="number" min="0" className="input"
                 value={lowStockQty}
@@ -459,6 +478,17 @@ export default function SettingsPage() {
               />
               <p className="text-xs text-slate-500 mt-1">0 deixa sem limite automático.</p>
             </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <label className="label">Quadro de avisos — taxas de parcelamento</label>
+            <textarea
+              className="input min-h-[88px] resize-y"
+              value={installmentRateNotice}
+              onChange={e => setInstallmentRateNotice(e.target.value)}
+              placeholder="Informações internas sobre taxas, operadora e revisão dos valores..."
+            />
+            <p className="text-xs text-slate-500 mt-1">Informação administrativa; não aparece na tela de venda.</p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-3">

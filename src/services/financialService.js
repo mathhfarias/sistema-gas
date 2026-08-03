@@ -15,11 +15,6 @@ function monthCountInRange(start, end) {
   return Math.max(1, count)
 }
 
-function normalizeDateLabel(value) {
-  if (!value) return 'Sem data'
-  return String(value).slice(0, 10).split('-').reverse().join('/')
-}
-
 function expenseCategoryLabel(category) {
   const labels = {
     rent: 'Aluguel', salary: 'Salários', utilities: 'Contas de consumo', fuel: 'Combustível',
@@ -38,7 +33,7 @@ export const financialService = {
   async getProfitLoss(company_id, start, end) {
     const { data: sales, error: salesError } = await supabase
       .from('sales')
-      .select('total, subtotal, delivery_fee, discount, sale_items(quantity, unit_price, cost_price)')
+      .select('id, sale_number, sold_at, total, subtotal, delivery_fee, discount, sale_items(quantity, unit_price, cost_price), sale_payments(id, amount, installments, fee_percentage, fee_amount, net_amount)')
       .eq('company_id', company_id)
       .eq('status', 'completed')
       .gte('sold_at', start)
@@ -94,9 +89,42 @@ export const financialService = {
         paymentMethod: 'Configuração mensal',
       }))
 
+    const installmentSales = (sales || []).filter(sale =>
+      (sale.sale_payments || []).some(payment => Number(payment.installments || 1) > 1)
+    )
+    const installmentPayments = installmentSales.flatMap(sale =>
+      (sale.sale_payments || [])
+        .filter(payment => Number(payment.installments || 1) > 1)
+        .map(payment => ({ ...payment, sale_id: sale.id, sale_number: sale.sale_number, sold_at: sale.sold_at }))
+    )
+    const splitPaymentSales = (sales || []).filter(sale => (sale.sale_payments || []).length > 1)
+    const splitPaymentSalesCount = splitPaymentSales.length
+    const splitPaymentGrossAmount = splitPaymentSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0)
+
+    const installmentSalesCount = installmentSales.length
+    const installmentGrossAmount = installmentPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+    const installmentFees = installmentPayments.reduce((sum, payment) => sum + Number(payment.fee_amount || 0), 0)
+    const installmentNetAmount = installmentPayments.reduce((sum, payment) => {
+      const amount = Number(payment.amount || 0)
+      const fee = Number(payment.fee_amount || 0)
+      return sum + Number(payment.net_amount ?? (amount - fee))
+    }, 0)
+    const installmentFeeDetails = installmentPayments
+      .filter(payment => Number(payment.fee_amount || 0) > 0)
+      .map(payment => ({
+        id: `installment-${payment.id || payment.sale_id}`,
+        name: `Taxa do parcelamento — venda #${payment.sale_number || '—'}`,
+        category: 'installment_fee',
+        categoryLabel: 'Taxas de vendas parceladas',
+        amount: Number(payment.fee_amount || 0),
+        paid_at: payment.sold_at,
+        due_date: null,
+        paymentMethod: `${Number(payment.installments || 1)}x no cartão`,
+      }))
+
     const grossProfit = grossRevenue - cogs
     const totalPaidExpenses = (paidExpenses || []).reduce((s, e) => s + Number(e.paid_amount || e.amount), 0)
-    const totalOperatingExpenses = totalPaidExpenses + machineMonthlyFees
+    const totalOperatingExpenses = totalPaidExpenses + machineMonthlyFees + installmentFees
     const netProfit = grossProfit - totalOperatingExpenses
     const totalPendingExpenses = (pendingExpenses || []).reduce((s, e) => s + Number(e.amount), 0)
 
@@ -117,6 +145,14 @@ export const financialService = {
         count: machineFeeDetails.length,
       }
     }
+    if (installmentFees > 0) {
+      expenseBreakdownMap.installment_fee = {
+        category: 'installment_fee',
+        name: 'Taxas de vendas parceladas',
+        total: installmentFees,
+        count: installmentFeeDetails.length,
+      }
+    }
 
     const expenseDetails = [
       ...(paidExpenses || []).map(exp => ({
@@ -130,6 +166,7 @@ export const financialService = {
         paymentMethod: exp.payment_methods?.name || '—',
       })),
       ...machineFeeDetails,
+      ...installmentFeeDetails,
     ].sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))
 
     return {
@@ -142,6 +179,12 @@ export const financialService = {
         grossMargin: grossRevenue > 0 ? (grossProfit / grossRevenue) * 100 : 0,
         totalPaidExpenses,
         machineMonthlyFees,
+        installmentFees,
+        installmentSalesCount,
+        splitPaymentSalesCount,
+        splitPaymentGrossAmount,
+        installmentGrossAmount,
+        installmentNetAmount,
         totalOperatingExpenses,
         netProfit,
         netMargin: grossRevenue > 0 ? (netProfit / grossRevenue) * 100 : 0,
@@ -188,7 +231,7 @@ export const financialService = {
   async getRevenueByMachine(company_id, start, end) {
     const { data, error } = await supabase
       .from('sales')
-      .select('total, card_machines(name, color, fee_credit, fee_debit), payment_methods(type), sale_payments(amount, payment_methods(type), card_machines(name, color, fee_credit, fee_debit))')
+      .select('total, card_machines(name, color, fee_credit, fee_debit), payment_methods(type), sale_payments(amount, installments, fee_amount, net_amount, payment_methods(type), card_machines(name, color, fee_credit, fee_debit))')
       .eq('company_id', company_id)
       .eq('status', 'completed')
       .gte('sold_at', start)
@@ -201,16 +244,29 @@ export const financialService = {
       const machinePayments = s.sale_payments?.length
         ? s.sale_payments
             .filter(p => p.card_machines)
-            .map(p => ({ machine: p.card_machines, type: p.payment_methods?.type || 'other', total: Number(p.amount || 0) }))
-        : (s.card_machines ? [{ machine: s.card_machines, type: s.payment_methods?.type || 'other', total: Number(s.total || 0) }] : [])
+            .map(p => ({
+              machine: p.card_machines,
+              type: p.payment_methods?.type || 'other',
+              total: Number(p.amount || 0),
+              installments: Number(p.installments || 1),
+              actualFee: Number(p.fee_amount || 0),
+              actualNet: Number(p.net_amount ?? (Number(p.amount || 0) - Number(p.fee_amount || 0))),
+            }))
+        : (s.card_machines ? [{ machine: s.card_machines, type: s.payment_methods?.type || 'other', total: Number(s.total || 0), installments: 1, actualFee: 0, actualNet: Number(s.total || 0) }] : [])
 
       machinePayments.forEach(payment => {
         const id = payment.machine.name
-        if (!grouped[id]) grouped[id] = { name: payment.machine.name, color: payment.machine.color, total: 0, count: 0, estimatedFee: 0 }
+        if (!grouped[id]) grouped[id] = { name: payment.machine.name, color: payment.machine.color, total: 0, count: 0, estimatedFee: 0, installmentCount: 0 }
         grouped[id].total += payment.total
         grouped[id].count++
-        const fee = payment.type === 'credit' ? payment.machine.fee_credit : payment.machine.fee_debit
-        grouped[id].estimatedFee += payment.total * Number(fee || 0)
+        if (payment.installments > 1) grouped[id].installmentCount++
+
+        if (payment.actualFee > 0 || payment.installments > 1) {
+          grouped[id].estimatedFee += payment.actualFee
+        } else {
+          const fee = payment.type === 'credit' ? payment.machine.fee_credit : payment.machine.fee_debit
+          grouped[id].estimatedFee += payment.total * Number(fee || 0)
+        }
       })
     })
 
