@@ -126,7 +126,7 @@ export default function SettingsPage() {
         supabase.from('companies').select('*').eq('id', companyId).maybeSingle(),
         supabase.from('settings').select('*').eq('company_id', companyId).maybeSingle(),
         supabase.from('profiles').select('id, full_name, email, role, is_active, created_at, updated_at').eq('company_id', companyId).order('full_name', { ascending: true }),
-        supabase.from('products').select('id, name, code, min_stock, is_active').eq('company_id', companyId).order('code', { ascending: true }),
+        supabase.from('products').select('id, name, code, min_stock, is_active, sale_price, street_sale_price').eq('company_id', companyId).order('code', { ascending: true }),
         supabase.from('payment_methods').select('id, name, type, delivery_fee, has_delivery_fee, requires_machine, is_active').eq('company_id', companyId).order('name', { ascending: true }),
         supabase.from('card_machines').select('id, name, provider, color, is_active, monthly_fee').eq('company_id', companyId).order('name', { ascending: true }),
         supabase.from('audit_logs').select('id, action, table_name, record_id, old_data, new_data, created_at, user_id').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
@@ -157,8 +157,19 @@ export default function SettingsPage() {
         setSettingsExtra(DEFAULT_EXTRA)
       }
 
+      const loadedProducts = (productsRes.data || []).map(product => {
+        const code = String(product.code || '').trim().toUpperCase()
+        if (!['P13', 'P45'].includes(code)) return product
+
+        return {
+          ...product,
+          sale_price: Number(product.sale_price || 0).toFixed(2).replace('.', ','),
+          street_sale_price: Number(product.street_sale_price || 0).toFixed(2).replace('.', ','),
+        }
+      })
+
       setUsers(usersRes.data || [])
-      setProducts(productsRes.data || [])
+      setProducts(loadedProducts)
       setPaymentMethods(methodsRes.data || [])
       setCardMachines(machinesRes.data || [])
       setAuditLogs(logsRes.data || [])
@@ -186,6 +197,32 @@ export default function SettingsPage() {
   async function handleSave(e) {
     e.preventDefault()
     if (!companyId) return
+
+    const p13 = products.find(p => String(p.code || '').trim().toUpperCase() === 'P13')
+    const p45 = products.find(p => String(p.code || '').trim().toUpperCase() === 'P45')
+
+    if (!p13 || !p45) {
+      toast.error('P13 ou P45 não foi encontrado no cadastro de produtos.')
+      return
+    }
+
+    const operationalPrices = [
+      { label: 'P13 — Portaria', value: p13.sale_price },
+      { label: 'P13 — Entrega/Rua', value: p13.street_sale_price },
+      { label: 'P45 — Portaria', value: p45.sale_price },
+      { label: 'P45 — Entrega/Rua', value: p45.street_sale_price },
+    ]
+
+    const invalidPrice = operationalPrices.find(item => parseCurrency(item.value) <= 0)
+    if (invalidPrice) {
+      toast.error(`Informe um valor maior que zero para ${invalidPrice.label}.`)
+      return
+    }
+
+    if (parseCurrency(counterP13InstallmentPrice) <= 0) {
+      toast.error('Informe um valor maior que zero para P13 — Portaria parcelado.')
+      return
+    }
 
     setSubmitting(true)
 
@@ -240,12 +277,20 @@ export default function SettingsPage() {
       if (settingsRes.error) throw settingsRes.error
       setSettingsId(settingsRes.data?.id || settingsId)
 
-      const productUpdates = products.map(p =>
-        supabase.from('products').update({
+      const productUpdates = products.map(p => {
+        const code = String(p.code || '').trim().toUpperCase()
+        const payload = {
           min_stock: Number(p.min_stock || 0),
           is_active: Boolean(p.is_active),
-        }).eq('id', p.id)
-      )
+        }
+
+        if (['P13', 'P45'].includes(code)) {
+          payload.sale_price = parseCurrency(p.sale_price)
+          payload.street_sale_price = parseCurrency(p.street_sale_price)
+        }
+
+        return supabase.from('products').update(payload).eq('id', p.id)
+      })
 
       const methodUpdates = paymentMethods.map(m =>
         supabase.from('payment_methods').update({
@@ -266,7 +311,20 @@ export default function SettingsPage() {
       await createAuditLog('settings.update', 'settings', settingsRes.data?.id, null, {
         company: companyPayload,
         settings: settingsPayload,
-        products: products.map(({ id, name, min_stock, is_active }) => ({ id, name, min_stock, is_active })),
+        products: products.map(p => {
+          const code = String(p.code || '').trim().toUpperCase()
+          return {
+            id: p.id,
+            name: p.name,
+            code: p.code,
+            min_stock: p.min_stock,
+            is_active: p.is_active,
+            ...(['P13', 'P45'].includes(code) ? {
+              sale_price: parseCurrency(p.sale_price),
+              street_sale_price: parseCurrency(p.street_sale_price),
+            } : {}),
+          }
+        }),
         payment_methods: paymentMethods.map(({ id, name, delivery_fee, has_delivery_fee, is_active }) => ({ id, name, delivery_fee, has_delivery_fee, is_active })),
         card_machines: cardMachines.map(({ id, name, is_active, monthly_fee }) => ({ id, name, is_active, monthly_fee })),
       })
@@ -319,6 +377,9 @@ export default function SettingsPage() {
   if (loading) return <PageLoader />
 
   const isAdmin = profile?.role === 'admin'
+  const p13Product = products.find(p => String(p.code || '').trim().toUpperCase() === 'P13')
+  const p45Product = products.find(p => String(p.code || '').trim().toUpperCase() === 'P45')
+  const priceProducts = [p13Product, p45Product].filter(Boolean)
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -434,6 +495,96 @@ export default function SettingsPage() {
             <SlidersHorizontal className="w-5 h-5 text-brand-600" />
             <h3 className="font-display font-semibold text-slate-800 text-base">Configurações Operacionais</h3>
           </div>
+
+          <div className="rounded-2xl border border-brand-100 bg-brand-50/60 p-4 space-y-4">
+            <div className="flex items-start gap-2">
+              <Package className="w-5 h-5 text-brand-600 mt-0.5" />
+              <div>
+                <h4 className="font-display font-semibold text-slate-800">Preços de venda — P13 e P45</h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Valores aplicados automaticamente na Nova Venda conforme produto e canal.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-4">
+              {priceProducts.map(product => {
+                const code = String(product.code || '').trim().toUpperCase()
+                const isP13 = code === 'P13'
+
+                return (
+                  <div key={product.id} className="rounded-xl border border-white/80 bg-white p-4 space-y-3">
+                    <div>
+                      <p className="font-semibold text-slate-800">{code}</p>
+                      <p className="text-xs text-slate-500">{product.name}</p>
+                    </div>
+
+                    <div className={`grid gap-3 ${isP13 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+                      <div className="form-group">
+                        <label className="label">{code} — Portaria (R$)</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="input pl-8"
+                            value={product.sale_price ?? ''}
+                            onChange={e => updateProduct(product.id, {
+                              sale_price: maskCurrency(e.target.value.replace(/\D/g, '')),
+                            })}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="label">{code} — Entrega/Rua (R$)</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="input pl-8"
+                            value={product.street_sale_price ?? ''}
+                            onChange={e => updateProduct(product.id, {
+                              street_sale_price: maskCurrency(e.target.value.replace(/\D/g, '')),
+                            })}
+                          />
+                        </div>
+                      </div>
+
+                      {isP13 && (
+                        <div className="form-group">
+                          <label className="label">P13 — Portaria parcelado (R$)</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              className="input pl-8"
+                              value={counterP13InstallmentPrice}
+                              onChange={e => setCounterP13InstallmentPrice(
+                                maskCurrency(e.target.value.replace(/\D/g, ''))
+                              )}
+                            />
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Usado em Portaria + P13 + Parcelamento.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {priceProducts.length < 2 && (
+              <p className="text-xs text-amber-700">
+                Cadastre e ative os produtos P13 e P45 para editar todos os preços por aqui.
+              </p>
+            )}
+          </div>
+
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="form-group">
               <label className="label">Taxa de entrega — Gás do Povo (R$)</label>
@@ -444,17 +595,6 @@ export default function SettingsPage() {
                   onChange={e => setGasPovoFee(maskCurrency(e.target.value.replace(/\D/g,'')))}
                 />
               </div>
-            </div>
-            <div className="form-group">
-              <label className="label">P13 na Portaria — cartão parcelado (R$)</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
-                <input type="text" inputMode="numeric" className="input pl-8"
-                  value={counterP13InstallmentPrice}
-                  onChange={e => setCounterP13InstallmentPrice(maskCurrency(e.target.value.replace(/\D/g,'')))}
-                />
-              </div>
-              <p className="text-xs text-slate-500 mt-1">Aplicado automaticamente ao selecionar Portaria + P13 + Parcelamento.</p>
             </div>
             <div className="form-group">
               <label className="label">Alerta geral de estoque baixo</label>
