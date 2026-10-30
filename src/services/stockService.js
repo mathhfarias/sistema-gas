@@ -12,6 +12,75 @@ function validatePositiveQuantity(quantity, label = 'quantidade') {
   return null
 }
 
+
+function roundMoney(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
+function allocatePurchaseCosts(items, freightCost = 0, discountCredit = 0) {
+  const normalizedItems = (items || []).map(item => {
+    const quantity = normalizeQuantity(item.quantity)
+    const rawTotal = Number(
+      item.total_cost ??
+      item.product_total ??
+      (Number(item.unit_cost || 0) * quantity)
+    )
+
+    return {
+      ...item,
+      quantity,
+      total_cost: roundMoney(rawTotal),
+    }
+  })
+
+  const productsTotal = roundMoney(
+    normalizedItems.reduce((sum, item) => sum + Number(item.total_cost || 0), 0)
+  )
+  const freight = roundMoney(freightCost)
+  const discount = roundMoney(discountCredit)
+
+  let freightAllocated = 0
+  let discountAllocated = 0
+
+  const calculatedItems = normalizedItems.map((item, index) => {
+    const isLast = index === normalizedItems.length - 1
+    const ratio = productsTotal > 0 ? item.total_cost / productsTotal : 0
+
+    const freightShare = isLast
+      ? roundMoney(freight - freightAllocated)
+      : roundMoney(freight * ratio)
+
+    const discountShare = isLast
+      ? roundMoney(discount - discountAllocated)
+      : roundMoney(discount * ratio)
+
+    freightAllocated = roundMoney(freightAllocated + freightShare)
+    discountAllocated = roundMoney(discountAllocated + discountShare)
+
+    const finalTotal = roundMoney(item.total_cost + freightShare - discountShare)
+    const grossUnit = item.quantity > 0 ? item.total_cost / item.quantity : 0
+    const finalUnit = item.quantity > 0 ? finalTotal / item.quantity : 0
+
+    return {
+      ...item,
+      unit_cost: roundMoney(grossUnit),
+      freight_allocated: freightShare,
+      discount_allocated: discountShare,
+      final_total_cost: finalTotal,
+      final_unit_cost: Number(finalUnit.toFixed(4)),
+      empty_returned: item.quantity,
+    }
+  })
+
+  return {
+    items: calculatedItems,
+    productsTotal,
+    freight,
+    discount,
+    totalCost: roundMoney(productsTotal + freight - discount),
+  }
+}
+
 export const stockService = {
   /**
    * Retorna saldo atual do estoque por produto.
@@ -39,16 +108,27 @@ export const stockService = {
       company_id,
       supplier_id,
       supplier_name,
-      items, // [{ product_id, product_name, quantity, unit_cost, empty_returned }]
+      items,
       notes,
       purchased_at,
       freight_cost = 0,
+      discount_credit = 0,
       created_by,
     } = payload
 
-    const items_cost = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0)
-    const normalizedFreightCost = Number(freight_cost || 0)
-    const total_cost = items_cost + normalizedFreightCost
+    const costs = allocatePurchaseCosts(items, freight_cost, discount_credit)
+
+    if (!costs.items.length || costs.items.some(item => !item.product_id || item.quantity <= 0)) {
+      return { error: { message: 'Informe produto e quantidade maior que zero em todos os itens.' } }
+    }
+
+    if (costs.items.some(item => item.total_cost <= 0)) {
+      return { error: { message: 'Informe o valor total dos produtos em todos os itens.' } }
+    }
+
+    if (costs.discount < 0 || costs.totalCost < 0) {
+      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da chegada negativo.' } }
+    }
 
     const { data: purchase, error: purchaseError } = await supabase
       .from('purchases')
@@ -56,8 +136,9 @@ export const stockService = {
         company_id,
         supplier_id,
         supplier_name,
-        total_cost,
-        freight_cost: normalizedFreightCost,
+        total_cost: costs.totalCost,
+        freight_cost: costs.freight,
+        discount_credit: costs.discount,
         notes,
         purchased_at: purchased_at || new Date().toISOString(),
         created_by,
@@ -67,14 +148,18 @@ export const stockService = {
 
     if (purchaseError) return { error: purchaseError }
 
-    const purchaseItems = items.map(i => ({
+    const purchaseItems = costs.items.map(item => ({
       purchase_id: purchase.id,
-      product_id: i.product_id,
-      product_name: i.product_name,
-      quantity: i.quantity,
-      unit_cost: i.unit_cost,
-      total_cost: i.quantity * i.unit_cost,
-      empty_returned: i.quantity,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      unit_cost: item.unit_cost,
+      total_cost: item.total_cost,
+      freight_allocated: item.freight_allocated,
+      discount_allocated: item.discount_allocated,
+      final_total_cost: item.final_total_cost,
+      final_unit_cost: item.final_unit_cost,
+      empty_returned: item.quantity,
     }))
 
     const { error: itemsError } = await supabase
@@ -83,7 +168,7 @@ export const stockService = {
 
     if (itemsError) return { error: itemsError }
 
-    for (const item of items) {
+    for (const item of costs.items) {
       const { error } = await supabase.from('stock_movements').insert({
         company_id,
         product_id: item.product_id,
@@ -101,7 +186,6 @@ export const stockService = {
 
     return { data: purchase, error: null }
   },
-
   /**
    * Altera uma chegada já registrada e ajusta o estoque pela diferença.
    *
@@ -120,6 +204,7 @@ export const stockService = {
       notes,
       purchased_at,
       freight_cost = 0,
+      discount_credit = 0,
       created_by,
     } = payload
 
@@ -127,30 +212,22 @@ export const stockService = {
       return { error: { message: 'Compra/chegada não informada.' } }
     }
 
-    const normalizedItems = (items || []).map(item => {
-      const quantity = normalizeQuantity(item.quantity)
-      return {
-        ...item,
-        quantity,
-        unit_cost: Number(item.unit_cost || 0),
-        empty_returned: quantity,
-      }
-    })
+    const costs = allocatePurchaseCosts(items, freight_cost, discount_credit)
+    const normalizedItems = costs.items
 
-    if (!normalizedItems.length || normalizedItems.some(i => !i.product_id || i.quantity <= 0)) {
+    if (!normalizedItems.length || normalizedItems.some(item => !item.product_id || item.quantity <= 0)) {
       return { error: { message: 'Informe produto e quantidade maior que zero em todos os itens.' } }
     }
 
-    const items_cost = normalizedItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0)
-    const normalizedFreightCost = Number(freight_cost || 0)
-    const total_cost = items_cost + normalizedFreightCost
+    if (normalizedItems.some(item => item.total_cost <= 0)) {
+      return { error: { message: 'Informe o valor total dos produtos em todos os itens.' } }
+    }
 
-    // Importante: para editar uma chegada, o estoque deve mudar apenas quando
-    // produto ou quantidade mudarem. Alterações de valor unitário, frete,
-    // fornecedor, data ou observação NÃO podem criar movimentação de estoque.
-    // Por isso usamos os itens gravados na chegada como base de comparação,
-    // e não o histórico de stock_movements, que pode ter sido registrado em
-    // versões antigas com regras diferentes.
+    if (costs.discount < 0 || costs.totalCost < 0) {
+      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da chegada negativo.' } }
+    }
+
+    // Estoque só muda quando produto ou quantidade mudarem.
     const { data: oldItems, error: oldItemsError } = await supabase
       .from('purchase_items')
       .select('product_id, quantity')
@@ -218,8 +295,9 @@ export const stockService = {
       .update({
         supplier_id,
         supplier_name,
-        total_cost,
-        freight_cost: normalizedFreightCost,
+        total_cost: costs.totalCost,
+        freight_cost: costs.freight,
+        discount_credit: costs.discount,
         notes,
         purchased_at: purchased_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -236,14 +314,18 @@ export const stockService = {
 
     if (deleteItemsError) return { error: deleteItemsError }
 
-    const purchaseItems = normalizedItems.map(i => ({
+    const purchaseItems = normalizedItems.map(item => ({
       purchase_id,
-      product_id: i.product_id,
-      product_name: i.product_name,
-      quantity: i.quantity,
-      unit_cost: i.unit_cost,
-      total_cost: i.quantity * i.unit_cost,
-      empty_returned: i.quantity,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      unit_cost: item.unit_cost,
+      total_cost: item.total_cost,
+      freight_allocated: item.freight_allocated,
+      discount_allocated: item.discount_allocated,
+      final_total_cost: item.final_total_cost,
+      final_unit_cost: item.final_unit_cost,
+      empty_returned: item.quantity,
     }))
 
     const { error: itemsError } = await supabase
@@ -254,7 +336,6 @@ export const stockService = {
 
     return { data: { id: purchase_id }, error: null }
   },
-
 
   /**
    * Exclui uma chegada de gás de forma segura.

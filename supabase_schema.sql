@@ -250,6 +250,7 @@ CREATE TABLE IF NOT EXISTS purchases (
   supplier_name TEXT,
   total_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
   freight_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
+  discount_credit NUMERIC(12,2) NOT NULL DEFAULT 0,
   notes TEXT,
   purchased_at TIMESTAMPTZ DEFAULT NOW(),
   created_by UUID REFERENCES profiles(id),
@@ -268,6 +269,10 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   quantity INTEGER NOT NULL DEFAULT 1,
   unit_cost NUMERIC(10,2) NOT NULL,
   total_cost NUMERIC(10,2) NOT NULL,
+  freight_allocated NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount_allocated NUMERIC(12,2) NOT NULL DEFAULT 0,
+  final_total_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
+  final_unit_cost NUMERIC(12,4) NOT NULL DEFAULT 0,
   empty_returned INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
