@@ -60,6 +60,18 @@ function parseDateOnly(dateValue) {
   return new Date(year, month - 1, day)
 }
 
+function toLocalDateInputValue(date = new Date()) {
+  const pad = value => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function formatDateBR(dateValue) {
+  const raw = String(dateValue || '').slice(0, 10)
+  const [year, month, day] = raw.split('-')
+  if (!year || !month || !day) return '—'
+  return `${day}/${month}/${year}`
+}
+
 function formatExpenseDay(dateValue) {
   const date = parseDateOnly(dateValue)
   if (!date) return 'Sem data'
@@ -98,6 +110,9 @@ export default function ExpensesPage() {
   const companyId = profile?.company_id
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [payingExpense, setPayingExpense] = useState(null)
+  const [paymentDate, setPaymentDate] = useState(toLocalDateInputValue())
+  const [payingSubmitting, setPayingSubmitting] = useState(false)
   const [filter, setFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState(buildDefaultDateFilter())
   const [showAllMonths, setShowAllMonths] = useState(false)
@@ -143,16 +158,36 @@ export default function ExpensesPage() {
   const overdue = dateFilteredList.filter(e => e.status === 'overdue')
   const overdueOutsideTotal = overdueOutsidePeriod.reduce((s, e) => s + Number(e.amount), 0)
 
-  async function markAsPaid(exp) {
-    const today = new Date().toISOString().slice(0, 10)
-    const paidDate = window.prompt('Informe a data real do pagamento. Essa data define em qual mês a despesa entra no DRE.', today)
-    if (!paidDate) return
+  function openPaymentModal(exp) {
+    setPayingExpense(exp)
+    setPaymentDate(toLocalDateInputValue())
+  }
 
+  async function confirmPayment() {
+    if (!payingExpense) return
+
+    if (!paymentDate) {
+      toast.error('Informe a data real do pagamento.')
+      return
+    }
+
+    setPayingSubmitting(true)
+
+    const exp = payingExpense
     const { error } = await supabase
       .from('expenses')
-      .update({ status: 'paid', paid_at: `${paidDate}T12:00:00`, paid_amount: exp.amount })
+      .update({
+        status: 'paid',
+        paid_at: `${paymentDate}T12:00:00`,
+        paid_amount: exp.amount,
+      })
       .eq('id', exp.id)
-    if (error) { toast.error('Erro ao marcar como pago'); return }
+
+    if (error) {
+      setPayingSubmitting(false)
+      toast.error('Erro ao marcar como pago')
+      return
+    }
 
     if (exp.recurrence && exp.recurrence !== 'none') {
       const due = parseDateOnly(exp.due_date) || new Date(exp.due_date)
@@ -161,7 +196,7 @@ export default function ExpensesPage() {
       if (exp.recurrence === 'monthly')   due.setMonth(due.getMonth() + 1)
       if (exp.recurrence === 'yearly')    due.setFullYear(due.getFullYear() + 1)
 
-      await supabase.from('expenses').insert({
+      const { error: recurrenceError } = await supabase.from('expenses').insert({
         company_id: exp.company_id,
         name: exp.name,
         category: exp.category,
@@ -173,10 +208,22 @@ export default function ExpensesPage() {
         status: 'pending',
         created_by: exp.created_by,
       })
-      toast.success('Pago! Próxima parcela criada automaticamente.')
+
+      if (recurrenceError) {
+        setPayingSubmitting(false)
+        setPayingExpense(null)
+        toast.error('Pagamento salvo, mas houve erro ao criar a próxima recorrência.')
+        refetch()
+        return
+      }
+
+      toast.success(`Pago em ${formatDateBR(paymentDate)}! Próxima parcela criada automaticamente.`)
     } else {
-      toast.success('Marcado como pago!')
+      toast.success(`Pagamento registrado em ${formatDateBR(paymentDate)}!`)
     }
+
+    setPayingSubmitting(false)
+    setPayingExpense(null)
     refetch()
   }
 
@@ -321,7 +368,7 @@ export default function ExpensesPage() {
                     exp={exp}
                     isOutsidePeriod={overdueOutsideIds.has(exp.id) && !showAllMonths}
                     onEdit={() => openEdit(exp)}
-                    onPaid={() => markAsPaid(exp)}
+                    onPaid={() => openPaymentModal(exp)}
                     onDelete={() => deleteExpense(exp)}
                   />
                 ))}
@@ -330,6 +377,63 @@ export default function ExpensesPage() {
           ))}
         </div>
       )}
+
+      <Modal
+        open={!!payingExpense}
+        onClose={() => {
+          if (payingSubmitting) return
+          setPayingExpense(null)
+        }}
+        title="Registrar pagamento"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-500">Despesa</p>
+            <p className="font-semibold text-slate-900 mt-0.5">{payingExpense?.name || '—'}</p>
+            <p className="text-sm text-slate-600 mt-1">
+              Valor: <strong>{formatCurrency(payingExpense?.amount || 0)}</strong>
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="label">Data real do pagamento *</label>
+            <input
+              type="date"
+              className="input"
+              value={paymentDate}
+              onChange={e => setPaymentDate(e.target.value)}
+              required
+            />
+            <p className="text-sm font-medium text-slate-700 mt-2">
+              Data selecionada: {formatDateBR(paymentDate)}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              Essa data define em qual mês a despesa entra no DRE.
+            </p>
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={payingSubmitting}
+              onClick={() => setPayingExpense(null)}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-success"
+              disabled={payingSubmitting || !paymentDate}
+              onClick={confirmPayment}
+            >
+              <CheckCircle className="w-4 h-4" />
+              {payingSubmitting ? 'Registrando...' : 'Confirmar pagamento'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <ExpenseModal
         key={editing?.id || 'new'}
@@ -374,7 +478,7 @@ function ExpenseTimelineCard({ exp, isOutsidePeriod = false, onEdit, onPaid, onD
         </div>
         <p className="text-sm text-slate-500 mt-1">
           Vencimento: {formatExpenseDay(exp.due_date)}
-          {exp.status === 'paid' && exp.paid_at ? ` · Pago em: ${formatExpenseDay(exp.paid_at)}` : ''}
+          {exp.status === 'paid' && exp.paid_at ? ` · Pago em: ${formatDateBR(exp.paid_at)}` : ''}
           {isOutsidePeriod ? ' · Atrasada de mês anterior' : ''}
           {exp.payment_methods?.name ? ` · ${exp.payment_methods.name}` : ''}
           {recurrence ? ` · ${recurrence}` : ''}
@@ -440,6 +544,11 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
 
   async function handleSubmit(e) {
     e.preventDefault()
+    if (status === 'paid' && !paidDate) {
+      toast.error('Informe a data real do pagamento.')
+      return
+    }
+
     setSubmitting(true)
     const payload = {
       company_id: companyId,
@@ -447,7 +556,7 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
       amount: parseCurrency(amount),
       due_date: dueDate,
       status,
-      paid_at: status === 'paid' ? `${paidDate || dueDate}T12:00:00` : null,
+      paid_at: status === 'paid' ? `${paidDate}T12:00:00` : null,
       paid_amount: status === 'paid' ? parseCurrency(amount) : null,
       recurrence, notes,
       payment_method_id: paymentMethodId || null,
@@ -506,7 +615,17 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
         <div className="grid grid-cols-2 gap-3">
           <div className="form-group">
             <label className="label">Status</label>
-            <select className="input" value={status} onChange={e => setStatus(e.target.value)}>
+            <select
+              className="input"
+              value={status}
+              onChange={e => {
+                const nextStatus = e.target.value
+                setStatus(nextStatus)
+                if (nextStatus === 'paid' && !paidDate) {
+                  setPaidDate(toLocalDateInputValue())
+                }
+              }}
+            >
               <option value="pending">Pendente</option>
               <option value="overdue">Em atraso</option>
               <option value="paid">Pago</option>
@@ -515,7 +634,8 @@ function ExpenseModal({ open, editing, companyId, userId, paymentMethods = [], o
           {status === 'paid' && (
             <div className="form-group">
               <label className="label">Data real do pagamento</label>
-              <input type="date" className="input" value={paidDate} onChange={e => setPaidDate(e.target.value)} />
+              <input type="date" className="input" value={paidDate} onChange={e => setPaidDate(e.target.value)} required />
+              <p className="text-sm font-medium text-slate-700 mt-2">Data selecionada: {formatDateBR(paidDate)}</p>
               <p className="text-xs text-slate-500 mt-1">Esta data define o mês em que a despesa entra no DRE.</p>
             </div>
           )}
