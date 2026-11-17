@@ -1,12 +1,13 @@
 // src/pages/SalesPage.jsx
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, XCircle, Pencil, CalendarDays, PlusCircle, Trash2 } from 'lucide-react'
+import { Plus, Search, XCircle, Pencil, CalendarDays, PlusCircle, Trash2, Download } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { salesService } from '../services/salesService'
 import { PageHeader, PageLoader, EmptyState, Modal, StatCard } from '../components/ui'
 import { formatCurrency, formatDateTime, parseCurrency, maskCurrency } from '../utils/format'
+import { exportSalesExcelReport } from '../utils/exportSalesExcelReport'
 import toast from 'react-hot-toast'
 
 const PERIOD_LABELS = {
@@ -126,6 +127,7 @@ export function SalesPage() {
   const [settings, setSettings] = useState({ gas_povo_delivery_fee: 20 })
   const [loading, setLoading] = useState(true)
   const [editingSale, setEditingSale] = useState(null)
+  const [exporting, setExporting] = useState(false)
 
   const range = useMemo(() => getPeriodRange(period, startDate, endDate), [period, startDate, endDate])
 
@@ -169,6 +171,103 @@ export function SalesPage() {
     setLoading(false)
   }
 
+  async function handleExportExcel() {
+    if (!companyId || exporting) return
+
+    setExporting(true)
+    try {
+      const exportSales = []
+      const pageSize = 1000
+      let offset = 0
+
+      while (true) {
+        const { data, error } = await salesService.getSales({
+          company_id: companyId,
+          start: range.start,
+          end: range.end,
+          limit: pageSize,
+          offset,
+        })
+
+        if (error) throw error
+        const page = data || []
+        exportSales.push(...page)
+        if (page.length < pageSize) break
+        offset += pageSize
+
+        if (offset > 100000) {
+          throw new Error('O período possui vendas demais para uma única exportação.')
+        }
+      }
+
+      const exportPurchases = []
+      let purchaseOffset = 0
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('purchases')
+          .select(`
+            id,
+            purchase_number,
+            supplier_name,
+            total_cost,
+            freight_cost,
+            discount_credit,
+            notes,
+            purchased_at,
+            purchase_items(
+              id,
+              product_id,
+              product_name,
+              quantity,
+              unit_cost,
+              total_cost,
+              freight_allocated,
+              discount_allocated,
+              final_total_cost,
+              final_unit_cost
+            )
+          `)
+          .eq('company_id', companyId)
+          .or('is_deleted.is.null,is_deleted.eq.false')
+          .gte('purchased_at', range.start)
+          .lte('purchased_at', range.end)
+          .order('purchased_at', { ascending: true })
+          .range(purchaseOffset, purchaseOffset + pageSize - 1)
+
+        if (error) throw error
+        const page = data || []
+        exportPurchases.push(...page)
+        if (page.length < pageSize) break
+        purchaseOffset += pageSize
+
+        if (purchaseOffset > 100000) {
+          throw new Error('O período possui chegadas demais para uma única exportação.')
+        }
+      }
+
+      const { data: company } = await supabase
+        .from('companies')
+        .select('name')
+        .eq('id', companyId)
+        .maybeSingle()
+
+      const { filename } = await exportSalesExcelReport({
+        sales: exportSales,
+        purchases: exportPurchases,
+        companyName: company?.name || 'GasMaster',
+        range,
+      })
+
+      toast.success(`Excel gerado: ${filename}`)
+    } catch (error) {
+      console.error('Erro ao exportar Excel:', error)
+      toast.error(`Erro ao gerar Excel: ${error?.message || 'erro desconhecido'}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const filtered = (sales || []).filter(s => {
     const term = search.toLowerCase()
     return (
@@ -208,9 +307,20 @@ export function SalesPage() {
         title="Vendas"
         subtitle={`Histórico de vendas — ${PERIOD_LABELS[period]}`}
         actions={
-          <button className="btn-primary" onClick={() => navigate('/vendas/nova')}>
-            <Plus className="w-4 h-4" /> Nova Venda
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-secondary"
+              onClick={handleExportExcel}
+              disabled={exporting || loading}
+              title="Exportar vendas e compras do período selecionado"
+            >
+              <Download className="w-4 h-4" />
+              {exporting ? 'Gerando Excel...' : 'Exportar Excel'}
+            </button>
+            <button className="btn-primary" onClick={() => navigate('/vendas/nova')}>
+              <Plus className="w-4 h-4" /> Nova Venda
+            </button>
+          </div>
         }
       />
 
