@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Truck, Pencil, Trash2, PackageCheck, AlertTriangle } from 'lucide-react'
+import { Plus, Truck, Pencil, Trash2, PackageCheck, AlertTriangle, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -107,6 +107,7 @@ export default function PurchasesPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingPurchase, setEditingPurchase] = useState(null)
   const [receivingPurchase, setReceivingPurchase] = useState(null)
+  const [detailPurchase, setDetailPurchase] = useState(null)
 
   const { data: purchases, loading, refetch } = useSupabaseQuery(
     () => supabase
@@ -297,6 +298,14 @@ export default function PurchasesPage() {
 
                         <button
                           className="btn-secondary btn-sm"
+                          onClick={() => setDetailPurchase(purchase)}
+                          title="Visualizar detalhes da compra"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> Ver
+                        </button>
+
+                        <button
+                          className="btn-secondary btn-sm"
                           onClick={() => openEditModal(purchase)}
                         >
                           <Pencil className="w-3.5 h-3.5" /> Alterar
@@ -317,6 +326,16 @@ export default function PurchasesPage() {
           </table>
         </div>
       )}
+
+      <PurchaseDetailsModal
+        open={Boolean(detailPurchase)}
+        purchase={detailPurchase}
+        onClose={() => setDetailPurchase(null)}
+        onReceive={purchase => {
+          setDetailPurchase(null)
+          setReceivingPurchase(purchase)
+        }}
+      />
 
       <PurchaseModal
         open={showModal}
@@ -356,6 +375,184 @@ export default function PurchasesPage() {
         }}
       />
     </div>
+  )
+}
+
+
+function PurchaseDetailsModal({ open, purchase, onClose, onReceive }) {
+  const [receipts, setReceipts] = useState([])
+  const [loadingReceipts, setLoadingReceipts] = useState(false)
+
+  useEffect(() => {
+    if (!open || !purchase?.id) {
+      setReceipts([])
+      return
+    }
+
+    let active = true
+
+    async function loadReceipts() {
+      setLoadingReceipts(true)
+      const { data, error } = await supabase
+        .from('purchase_receipts')
+        .select(`
+          id,
+          received_at,
+          notes,
+          purchase_receipt_items(id, product_name, quantity)
+        `)
+        .eq('purchase_id', purchase.id)
+        .order('received_at', { ascending: true })
+
+      if (!active) return
+      if (error) {
+        console.error('Erro ao carregar histórico de recebimentos:', error)
+        setReceipts([])
+      } else {
+        setReceipts(data || [])
+      }
+      setLoadingReceipts(false)
+    }
+
+    loadReceipts()
+    return () => { active = false }
+  }, [open, purchase?.id])
+
+  if (!purchase) return null
+
+  const status = getDeliveryStatusMeta(purchase)
+  const progress = getDeliveryProgress(purchase)
+  const items = purchase.purchase_items || []
+  const productsTotal = items.reduce((sum, item) => sum + Number(item.total_cost || 0), 0)
+  const freight = Number(purchase.freight_cost || 0)
+  const discount = Number(purchase.discount_credit || 0)
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Detalhes da Compra #${purchase.purchase_number || ''}`}
+      maxWidth="max-w-4xl"
+    >
+      <div className="space-y-5">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-500">Fornecedor</p>
+            <p className="font-semibold mt-1">{purchase.supplier_name || '—'}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-500">Data da compra</p>
+            <p className="font-semibold mt-1">{formatDateTime(purchase.purchased_at)}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-500">Previsão</p>
+            <p className="font-semibold mt-1">{purchase.expected_delivery_date ? formatDateOnlyBR(purchase.expected_delivery_date) : '—'}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-500">Status</p>
+            <span className={`inline-flex mt-1 items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${status.className}`}>
+              {status.label}
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <h3 className="font-semibold text-slate-900">Itens da compra</h3>
+            <p className="text-xs text-slate-500">
+              {progress.received} de {progress.ordered} recebido(s)
+              {progress.remaining > 0 && ` • faltam ${progress.remaining}`}
+            </p>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th>Produto</th>
+                  <th className="text-right">Pedido</th>
+                  <th className="text-right">Recebido</th>
+                  <th className="text-right">Pendente</th>
+                  <th className="text-right">Produto/un.</th>
+                  <th className="text-right">Frete rateado</th>
+                  <th className="text-right">Crédito rateado</th>
+                  <th className="text-right">Custo final/un.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(item => {
+                  const ordered = Number(item.quantity || 0)
+                  const received = Number(item.received_quantity || 0)
+                  const remaining = Math.max(0, ordered - received)
+                  return (
+                    <tr key={item.id}>
+                      <td className="font-medium">{item.product_name}</td>
+                      <td className="text-right">{ordered}</td>
+                      <td className="text-right">{received}</td>
+                      <td className={`text-right font-medium ${remaining > 0 ? 'text-amber-700' : 'text-slate-500'}`}>{remaining}</td>
+                      <td className="text-right currency">{formatCurrency(item.unit_cost || 0)}</td>
+                      <td className="text-right currency">{formatCurrency(item.freight_allocated || 0)}</td>
+                      <td className="text-right currency text-emerald-700">{Number(item.discount_allocated || 0) > 0 ? '- ' : ''}{formatCurrency(item.discount_allocated || 0)}</td>
+                      <td className="text-right currency font-semibold">{formatCurrency(Number(item.final_unit_cost || 0) > 0 ? item.final_unit_cost : item.unit_cost || 0)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div className="rounded-xl border border-slate-200 p-4 space-y-2">
+            <h3 className="font-semibold mb-3">Valores da compra</h3>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Produtos</span><span className="currency font-medium">{formatCurrency(productsTotal)}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Frete</span><span className="currency font-medium">{formatCurrency(freight)}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Créditos / descontos</span><span className="currency font-medium text-emerald-700">- {formatCurrency(discount)}</span></div>
+            <div className="border-t border-slate-200 pt-2 flex justify-between"><span className="text-sm font-semibold">Total líquido</span><span className="currency font-bold">{formatCurrency(purchase.total_cost || 0)}</span></div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
+            <h3 className="font-semibold mb-3">Informações</h3>
+            <div className="space-y-3 text-sm">
+              <div><p className="text-xs text-slate-500">Recebimento concluído em</p><p className="font-medium mt-0.5">{purchase.received_at ? formatDateTime(purchase.received_at) : 'Ainda não concluído'}</p></div>
+              <div><p className="text-xs text-slate-500">Observações</p><p className="mt-0.5 whitespace-pre-wrap">{purchase.notes?.trim() || 'Nenhuma observação.'}</p></div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h3 className="font-semibold mb-2">Histórico de recebimentos</h3>
+          {loadingReceipts ? (
+            <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500">Carregando recebimentos...</div>
+          ) : receipts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nenhum recebimento físico registrado para esta compra.</div>
+          ) : (
+            <div className="space-y-2">
+              {receipts.map((receipt, index) => (
+                <div key={receipt.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><p className="font-medium">Recebimento {index + 1}</p><p className="text-xs text-slate-500 mt-0.5">{formatDateTime(receipt.received_at)}</p></div>
+                    <div className="text-right text-sm">
+                      {(receipt.purchase_receipt_items || []).map(item => <p key={item.id}><strong>{item.quantity}</strong> × {item.product_name}</p>)}
+                    </div>
+                  </div>
+                  {receipt.notes?.trim() && <p className="mt-2 pt-2 border-t border-slate-200 text-xs text-slate-600 whitespace-pre-wrap">{receipt.notes}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Fechar</button>
+          {purchase.delivery_status !== 'received' && (
+            <button type="button" className="btn-primary" onClick={() => onReceive?.(purchase)}>
+              <PackageCheck className="w-4 h-4" />
+              {purchase.delivery_status === 'partial' ? 'Receber restante' : 'Confirmar chegada'}
+            </button>
+          )}
+        </div>
+      </div>
+    </Modal>
   )
 }
 
