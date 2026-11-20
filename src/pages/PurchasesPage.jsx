@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Truck, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Truck, Pencil, Trash2, PackageCheck, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -34,20 +34,104 @@ function getFinalUnitCostsLabel(purchase) {
     .join(' • ')
 }
 
+function formatDateOnlyBR(value) {
+  const raw = String(value || '').slice(0, 10)
+  const [year, month, day] = raw.split('-')
+  if (!year || !month || !day) return '—'
+  return `${day}/${month}/${year}`
+}
+
+function todayDateKey() {
+  const now = new Date()
+  const pad = value => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+function getDeliveryProgress(purchase) {
+  const items = purchase?.purchase_items || []
+  const ordered = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+  const received = items.reduce((sum, item) => sum + Number(item.received_quantity || 0), 0)
+  return {
+    ordered,
+    received,
+    remaining: Math.max(0, ordered - received),
+  }
+}
+
+function getDeliveryStatusMeta(purchase) {
+  const status = purchase?.delivery_status || 'received'
+  const expected = String(purchase?.expected_delivery_date || '').slice(0, 10)
+  const today = todayDateKey()
+  const overdue = expected && expected < today && status !== 'received'
+
+  if (status === 'received') {
+    return {
+      label: 'Recebido',
+      className: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    }
+  }
+
+  if (status === 'partial') {
+    return {
+      label: overdue ? 'Parcial • atrasado' : 'Recebimento parcial',
+      className: overdue
+        ? 'bg-red-100 text-red-700 border-red-200'
+        : 'bg-amber-100 text-amber-800 border-amber-200',
+    }
+  }
+
+  if (overdue) {
+    return {
+      label: 'Atrasado',
+      className: 'bg-red-100 text-red-700 border-red-200',
+    }
+  }
+
+  if (expected === today) {
+    return {
+      label: 'Entrega prevista hoje',
+      className: 'bg-blue-100 text-blue-700 border-blue-200',
+    }
+  }
+
+  return {
+    label: 'Aguardando entrega',
+    className: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+  }
+}
+
 export default function PurchasesPage() {
   const { profile } = useAuth()
   const companyId = profile?.company_id
+
   const [showModal, setShowModal] = useState(false)
   const [editingPurchase, setEditingPurchase] = useState(null)
+  const [receivingPurchase, setReceivingPurchase] = useState(null)
 
   const { data: purchases, loading, refetch } = useSupabaseQuery(
     () => supabase
       .from('purchases')
-      .select('*, purchase_items(id, product_id, product_name, quantity, unit_cost, total_cost, empty_returned, freight_allocated, discount_allocated, final_total_cost, final_unit_cost)')
+      .select(`
+        *,
+        purchase_items(
+          id,
+          product_id,
+          product_name,
+          quantity,
+          received_quantity,
+          unit_cost,
+          total_cost,
+          empty_returned,
+          freight_allocated,
+          discount_allocated,
+          final_total_cost,
+          final_unit_cost
+        )
+      `)
       .eq('company_id', companyId)
       .or('is_deleted.is.null,is_deleted.eq.false')
       .order('purchased_at', { ascending: false })
-      .limit(50),
+      .limit(100),
     [companyId]
   )
 
@@ -67,8 +151,13 @@ export default function PurchasesPage() {
   }
 
   async function handleDeletePurchase(purchase) {
+    const progress = getDeliveryProgress(purchase)
+    const stockMessage = progress.received > 0
+      ? `\n\nJá foram recebidos ${progress.received} botijões. O estoque recebido será revertido.`
+      : '\n\nComo nada foi recebido ainda, o estoque não será alterado.'
+
     const confirmed = window.confirm(
-      `Excluir a chegada #${purchase.purchase_number || ''}?\n\nEssa ação vai ocultar a chegada da tela e reverter o estoque: diminui os cheios recebidos e devolve os vazios baixados.`
+      `Excluir a compra #${purchase.purchase_number || ''}?${stockMessage}`
     )
 
     if (!confirmed) return
@@ -77,15 +166,15 @@ export default function PurchasesPage() {
       purchase_id: purchase.id,
       company_id: companyId,
       performed_by: profile?.id,
-      reason: `Exclusão da chegada #${purchase.purchase_number || ''}`,
+      reason: `Exclusão da compra #${purchase.purchase_number || ''}`,
     })
 
     if (error) {
-      toast.error(error.message || 'Erro ao excluir chegada')
+      toast.error(error.message || 'Erro ao excluir compra')
       return
     }
 
-    toast.success('Chegada excluída e estoque revertido!')
+    toast.success('Compra excluída!')
     refetch()
   }
 
@@ -94,23 +183,30 @@ export default function PurchasesPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Chegada de Gás"
-        subtitle="Registro de compras e entrada de botijões"
+        title="Compras de Gás"
+        subtitle="Pedidos, previsão de entrega e recebimento físico"
         actions={
           <button className="btn-primary" onClick={openCreateModal}>
-            <Plus className="w-4 h-4" /> Registrar Chegada
+            <Plus className="w-4 h-4" /> Nova Compra
           </button>
         }
       />
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
-        <strong>Regra da chegada:</strong> toda chegada de gás aumenta os cheios e subtrai a mesma quantidade de vazios automaticamente.
-        Exemplo: chegou 10 P13 → +10 cheios e -10 vazios.
+        <strong>Novo fluxo:</strong> cadastrar uma compra não altera o estoque.
+        Os cheios entram e os vazios são baixados somente quando você clicar em
+        <strong> Confirmar chegada</strong>. Se chegar menos que o pedido, o sistema mantém o restante pendente.
       </div>
 
       {!(purchases || []).length ? (
-        <EmptyState icon={Truck} title="Nenhuma chegada registrada"
-          action={<button className="btn-primary btn-sm" onClick={openCreateModal}><Plus className="w-3.5 h-3.5" />Registrar</button>}
+        <EmptyState
+          icon={Truck}
+          title="Nenhuma compra registrada"
+          action={
+            <button className="btn-primary btn-sm" onClick={openCreateModal}>
+              <Plus className="w-3.5 h-3.5" /> Nova Compra
+            </button>
+          }
         />
       ) : (
         <div className="table-wrapper">
@@ -118,41 +214,105 @@ export default function PurchasesPage() {
             <thead>
               <tr>
                 <th>Nº</th>
-                <th>Data</th>
+                <th>Compra</th>
+                <th>Previsão</th>
                 <th>Fornecedor</th>
-                <th>Itens</th>
-                <th className="text-right">Frete</th>
-                <th className="text-right">Créditos</th>
-                <th className="text-right">Custo final/un.</th>
+                <th>Pedido / recebido</th>
+                <th>Status</th>
                 <th className="text-right">Total líquido</th>
                 <th className="text-right">Ações</th>
               </tr>
             </thead>
+
             <tbody>
-              {(purchases || []).map(p => (
-                <tr key={p.id}>
-                  <td className="font-mono text-xs text-slate-500">#{p.purchase_number}</td>
-                  <td className="text-xs whitespace-nowrap">{formatDateTime(p.purchased_at)}</td>
-                  <td className="font-medium">{p.supplier_name || '—'}</td>
-                  <td className="text-xs text-slate-500">
-                    {(p.purchase_items || []).map(i => `${i.quantity}x ${i.product_name}`).join(', ')}
-                  </td>
-                  <td className="text-right text-xs currency text-slate-500">{formatCurrency(p.freight_cost || 0)}</td>
-                  <td className="text-right text-xs currency text-emerald-700">{formatCurrency(p.discount_credit || 0)}</td>
-                  <td className="text-right text-xs text-slate-700 font-medium max-w-[280px]">{getFinalUnitCostsLabel(p)}</td>
-                  <td className="text-right font-semibold currency">{formatCurrency(p.total_cost)}</td>
-                  <td className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <button className="btn-secondary btn-sm" onClick={() => openEditModal(p)}>
-                        <Pencil className="w-3.5 h-3.5" /> Alterar
-                      </button>
-                      <button className="btn-danger btn-sm" onClick={() => handleDeletePurchase(p)}>
-                        <Trash2 className="w-3.5 h-3.5" /> Excluir
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {(purchases || []).map(purchase => {
+                const status = getDeliveryStatusMeta(purchase)
+                const progress = getDeliveryProgress(purchase)
+
+                return (
+                  <tr key={purchase.id}>
+                    <td className="font-mono text-xs text-slate-500">
+                      #{purchase.purchase_number}
+                    </td>
+
+                    <td className="text-xs whitespace-nowrap">
+                      {formatDateTime(purchase.purchased_at)}
+                    </td>
+
+                    <td className="text-xs whitespace-nowrap">
+                      {purchase.expected_delivery_date
+                        ? formatDateOnlyBR(purchase.expected_delivery_date)
+                        : '—'}
+                    </td>
+
+                    <td className="font-medium">{purchase.supplier_name || '—'}</td>
+
+                    <td className="text-xs min-w-[220px]">
+                      <div className="space-y-1">
+                        {(purchase.purchase_items || []).map(item => {
+                          const ordered = Number(item.quantity || 0)
+                          const received = Number(item.received_quantity || 0)
+                          const remaining = Math.max(0, ordered - received)
+
+                          return (
+                            <div key={item.id}>
+                              <span className="font-medium text-slate-700">
+                                {item.product_name}:
+                              </span>{' '}
+                              {ordered} pedido(s) • {received} recebido(s)
+                              {remaining > 0 && (
+                                <span className="text-amber-700 font-medium">
+                                  {' '}• faltam {remaining}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </td>
+
+                    <td>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${status.className}`}>
+                        {status.label}
+                      </span>
+                    </td>
+
+                    <td className="text-right font-semibold currency">
+                      {formatCurrency(purchase.total_cost)}
+                    </td>
+
+                    <td className="text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {purchase.delivery_status !== 'received' && (
+                          <button
+                            className="btn-primary btn-sm"
+                            onClick={() => setReceivingPurchase(purchase)}
+                          >
+                            <PackageCheck className="w-3.5 h-3.5" />
+                            {purchase.delivery_status === 'partial'
+                              ? 'Receber restante'
+                              : 'Confirmar chegada'}
+                          </button>
+                        )}
+
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => openEditModal(purchase)}
+                        >
+                          <Pencil className="w-3.5 h-3.5" /> Alterar
+                        </button>
+
+                        <button
+                          className="btn-danger btn-sm"
+                          onClick={() => handleDeletePurchase(purchase)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -165,9 +325,34 @@ export default function PurchasesPage() {
         userId={profile?.id}
         onClose={closeModal}
         onSuccess={() => {
+          const wasEditing = Boolean(editingPurchase)
           closeModal()
           refetch()
-          toast.success(editingPurchase ? 'Chegada alterada!' : 'Chegada registrada! Estoque atualizado.')
+          toast.success(
+            wasEditing
+              ? 'Compra alterada!'
+              : 'Compra registrada! Aguardando entrega.'
+          )
+        }}
+      />
+
+      <ReceiptModal
+        open={Boolean(receivingPurchase)}
+        purchase={receivingPurchase}
+        companyId={companyId}
+        userId={profile?.id}
+        onClose={() => setReceivingPurchase(null)}
+        onSuccess={result => {
+          setReceivingPurchase(null)
+          refetch()
+
+          if (result?.status === 'received') {
+            toast.success('Chegada confirmada! Compra recebida integralmente.')
+          } else {
+            toast.success(
+              `Recebimento parcial registrado. Ainda faltam ${result?.remaining_quantity || 0} botijões.`
+            )
+          }
         }}
       />
     </div>
@@ -179,18 +364,41 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   const [products, setProducts] = useState([])
   const [supplierId, setSupplierId] = useState('')
   const [supplierName, setSupplierName] = useState('')
-  const [items, setItems] = useState([{ product_id: '', product_name: '', quantity: 1, product_total: '', empty_returned: 1 }])
+  const [items, setItems] = useState([
+    {
+      id: null,
+      product_id: '',
+      product_name: '',
+      quantity: 1,
+      received_quantity: 0,
+      product_total: '',
+    },
+  ])
   const [notes, setNotes] = useState('')
   const [freightCost, setFreightCost] = useState('0,00')
   const [discountCredit, setDiscountCredit] = useState('0,00')
   const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().slice(0, 16))
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
   const isEditing = Boolean(purchase?.id)
+  const structuralLocked = isEditing && (purchase?.purchase_items || [])
+    .some(item => Number(item.received_quantity || 0) > 0)
 
   useEffect(() => {
     if (open && companyId) {
-      supabase.from('suppliers').select('id, name').eq('company_id', companyId).then(r => setSuppliers(r.data || []))
-      supabase.from('products').select('id, name, code').eq('company_id', companyId).eq('is_active', true).then(r => setProducts(r.data || []))
+      supabase
+        .from('suppliers')
+        .select('id, name')
+        .eq('company_id', companyId)
+        .then(r => setSuppliers(r.data || []))
+
+      supabase
+        .from('products')
+        .select('id, name, code')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+        .then(r => setProducts(r.data || []))
     }
   }, [open, companyId])
 
@@ -201,40 +409,57 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       setSupplierId(purchase.supplier_id || '')
       setSupplierName(purchase.supplier_name || '')
       setNotes(purchase.notes || '')
-      setFreightCost(maskCurrency(String(Math.round(Number(purchase.freight_cost || 0) * 100))))
-      setDiscountCredit(maskCurrency(String(Math.round(Number(purchase.discount_credit || 0) * 100))))
+      setFreightCost(
+        maskCurrency(String(Math.round(Number(purchase.freight_cost || 0) * 100)))
+      )
+      setDiscountCredit(
+        maskCurrency(String(Math.round(Number(purchase.discount_credit || 0) * 100)))
+      )
       setPurchasedAt(formatDateTimeInput(purchase.purchased_at))
-      setItems((purchase.purchase_items || []).map(item => ({
-        product_id: item.product_id || '',
-        product_name: item.product_name || '',
-        quantity: Number(item.quantity || 1),
-        product_total: maskCurrency(String(Math.round(Number(item.total_cost || 0) * 100))),
-        empty_returned: Number(item.quantity || 0),
-      })))
+      setExpectedDeliveryDate(
+        String(purchase.expected_delivery_date || '').slice(0, 10)
+      )
+      setItems(
+        (purchase.purchase_items || []).map(item => ({
+          id: item.id,
+          product_id: item.product_id || '',
+          product_name: item.product_name || '',
+          quantity: Number(item.quantity || 1),
+          received_quantity: Number(item.received_quantity || 0),
+          product_total: maskCurrency(
+            String(Math.round(Number(item.total_cost || 0) * 100))
+          ),
+        }))
+      )
     } else {
       setSupplierId('')
       setSupplierName('')
-      setItems([{ product_id: '', product_name: '', quantity: 1, product_total: '', empty_returned: 1 }])
+      setItems([
+        {
+          id: null,
+          product_id: '',
+          product_name: '',
+          quantity: 1,
+          received_quantity: 0,
+          product_total: '',
+        },
+      ])
       setNotes('')
       setFreightCost('0,00')
       setDiscountCredit('0,00')
       setPurchasedAt(new Date().toISOString().slice(0, 16))
+      setExpectedDeliveryDate('')
     }
   }, [open, purchase])
 
-  function setItem(idx, field, val) {
+  function setItem(idx, field, value) {
     setItems(prev => {
       const updated = [...prev]
-      updated[idx] = { ...updated[idx], [field]: val }
+      updated[idx] = { ...updated[idx], [field]: value }
 
       if (field === 'product_id') {
-        const product = products.find(p => p.id === val)
+        const product = products.find(p => p.id === value)
         if (product) updated[idx].product_name = product.name
-      }
-
-      if (field === 'quantity') {
-        const quantity = Math.max(0, Number(val || 0))
-        updated[idx].empty_returned = quantity
       }
 
       return updated
@@ -242,7 +467,12 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   }
 
   function removeItem(idx) {
-    setItems(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))
+    if (structuralLocked) return
+    setItems(prev => (
+      prev.length === 1
+        ? prev
+        : prev.filter((_, index) => index !== idx)
+    ))
   }
 
   const normalizedItems = items.map(item => {
@@ -255,12 +485,13 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       product_total: productTotal,
       total_cost: productTotal,
       unit_cost: quantity > 0 ? productTotal / quantity : 0,
-      empty_returned: quantity,
     }
   })
 
-  const itemsTotal = normalizedItems.reduce((sum, item) => sum + item.product_total, 0)
-  const totalQuantity = normalizedItems.reduce((sum, item) => sum + item.quantity, 0)
+  const itemsTotal = normalizedItems.reduce(
+    (sum, item) => sum + item.product_total,
+    0
+  )
   const freightTotal = parseCurrency(freightCost)
   const discountTotal = parseCurrency(discountCredit)
   const total = itemsTotal + freightTotal - discountTotal
@@ -283,8 +514,11 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
     freightAllocatedSoFar += freightAllocated
     discountAllocatedSoFar += discountAllocated
 
-    const finalTotalCost = item.product_total + freightAllocated - discountAllocated
-    const finalUnitCost = item.quantity > 0 ? finalTotalCost / item.quantity : 0
+    const finalTotalCost =
+      item.product_total + freightAllocated - discountAllocated
+
+    const finalUnitCost =
+      item.quantity > 0 ? finalTotalCost / item.quantity : 0
 
     return {
       ...item,
@@ -314,7 +548,9 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
     }
 
     if (discountTotal < 0 || total < 0) {
-      toast.error('Descontos/créditos não podem deixar o custo líquido da chegada negativo')
+      toast.error(
+        'Descontos/créditos não podem deixar o custo líquido da compra negativo'
+      )
       return
     }
 
@@ -329,11 +565,15 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       freight_cost: freightTotal,
       discount_credit: discountTotal,
       purchased_at: new Date(purchasedAt).toISOString(),
+      expected_delivery_date: expectedDeliveryDate || null,
       created_by: userId,
     }
 
     const { error } = isEditing
-      ? await stockService.updatePurchase({ purchase_id: purchase.id, ...payload })
+      ? await stockService.updatePurchase({
+          purchase_id: purchase.id,
+          ...payload,
+        })
       : await stockService.registerPurchase(payload)
 
     setSubmitting(false)
@@ -347,8 +587,24 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEditing ? `Alterar Chegada #${purchase?.purchase_number || ''}` : 'Registrar Chegada de Gás'} maxWidth="max-w-2xl">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={
+        isEditing
+          ? `Alterar Compra #${purchase?.purchase_number || ''}`
+          : 'Nova Compra de Gás'
+      }
+      maxWidth="max-w-2xl"
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
+        {structuralLocked && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Esta compra já possui recebimento. Produto e quantidade pedida ficam bloqueados,
+            mas você ainda pode corrigir valores, fornecedor, previsão e observações.
+          </div>
+        )}
+
         <div className="grid sm:grid-cols-2 gap-3">
           <div className="form-group">
             <label className="label">Fornecedor *</label>
@@ -357,17 +613,23 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
               value={supplierId}
               onChange={e => {
                 setSupplierId(e.target.value)
-                setSupplierName(suppliers.find(s => s.id === e.target.value)?.name || '')
+                setSupplierName(
+                  suppliers.find(s => s.id === e.target.value)?.name || ''
+                )
               }}
               required
             >
               <option value="">Selecionar...</option>
-              {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {suppliers.map(supplier => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
             </select>
           </div>
 
           <div className="form-group">
-            <label className="label">Data/Hora</label>
+            <label className="label">Data/Hora da compra</label>
             <input
               type="datetime-local"
               className="input"
@@ -375,56 +637,85 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
               onChange={e => setPurchasedAt(e.target.value)}
             />
           </div>
+
+          <div className="form-group sm:col-span-2">
+            <label className="label">Previsão de entrega</label>
+            <input
+              type="date"
+              className="input"
+              value={expectedDeliveryDate}
+              onChange={e => setExpectedDeliveryDate(e.target.value)}
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              Opcional. Enquanto a compra não for recebida, o sistema usa essa data para indicar atraso.
+            </p>
+          </div>
         </div>
 
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <label className="label mb-0">Produtos recebidos</label>
-            <button
-              type="button"
-              className="btn-secondary btn-sm"
-              onClick={() => setItems(prev => [...prev, {
-                product_id: '',
-                product_name: '',
-                quantity: 1,
-                product_total: '',
-                empty_returned: 1,
-              }])}
-            >
-              <Plus className="w-3.5 h-3.5" /> Item
-            </button>
+            <label className="label mb-0">Produtos do pedido</label>
+
+            {!structuralLocked && (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => setItems(prev => [
+                  ...prev,
+                  {
+                    id: null,
+                    product_id: '',
+                    product_name: '',
+                    quantity: 1,
+                    received_quantity: 0,
+                    product_total: '',
+                  },
+                ])}
+              >
+                <Plus className="w-3.5 h-3.5" /> Item
+              </button>
+            )}
           </div>
 
           {items.map((item, idx) => {
-            const automaticEmpty = Number(item.quantity || 0)
             const calculated = calculatedItems[idx]
-            const productUnitCost = calculated?.quantity > 0
-              ? calculated.product_total / calculated.quantity
-              : 0
+            const productUnitCost =
+              calculated?.quantity > 0
+                ? calculated.product_total / calculated.quantity
+                : 0
 
             return (
-              <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-2">
+              <div
+                key={item.id || idx}
+                className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-2"
+              >
                 <div className="grid grid-cols-2 gap-2">
                   <div className="form-group col-span-2">
                     <label className="label">Produto *</label>
                     <select
                       className="input"
                       value={item.product_id}
+                      disabled={structuralLocked}
                       onChange={e => setItem(idx, 'product_id', e.target.value)}
                       required
                     >
                       <option value="">Selecionar...</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      {products.map(product => (
+                        <option key={product.id} value={product.id}>
+                          {product.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
                   <div className="form-group">
-                    <label className="label">Qtd recebida</label>
+                    <label className="label">Qtd pedida</label>
                     <input
                       type="number"
                       min="1"
                       className="input"
                       value={item.quantity}
+                      disabled={structuralLocked}
                       onChange={e => setItem(idx, 'quantity', e.target.value)}
                       required
                     />
@@ -433,54 +724,65 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
                   <div className="form-group">
                     <label className="label">Valor total dos produtos</label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                        R$
+                      </span>
                       <input
                         type="text"
                         inputMode="numeric"
                         className="input pl-8"
                         placeholder="0,00"
                         value={item.product_total}
-                        onChange={e => setItem(idx, 'product_total', maskCurrency(e.target.value.replace(/\D/g, '')))}
+                        onChange={e => setItem(
+                          idx,
+                          'product_total',
+                          maskCurrency(e.target.value.replace(/\D/g, ''))
+                        )}
                         required
                       />
                     </div>
                   </div>
 
-                  <div className="form-group col-span-2">
-                    <label className="label">Vazios usados na chegada</label>
-                    <input
-                      type="number"
-                      className="input bg-slate-100 text-slate-500"
-                      value={automaticEmpty}
-                      disabled
-                    />
-                    <p className="text-xs text-slate-500 mt-1">
-                      Automático: sempre subtrai a mesma quantidade recebida.
-                    </p>
-                  </div>
+                  {Number(item.received_quantity || 0) > 0 && (
+                    <div className="col-span-2 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-xs text-blue-800">
+                      Já recebido: <strong>{item.received_quantity}</strong> de{' '}
+                      <strong>{item.quantity}</strong>.
+                    </div>
+                  )}
 
                   {calculated?.product_total > 0 && (
                     <div className="col-span-2 grid sm:grid-cols-4 gap-2 rounded-lg bg-white border border-slate-200 p-2 text-xs">
                       <div>
                         <p className="text-slate-500">Produto/un.</p>
-                        <p className="font-semibold text-slate-800">{formatCurrency(productUnitCost)}</p>
+                        <p className="font-semibold text-slate-800">
+                          {formatCurrency(productUnitCost)}
+                        </p>
                       </div>
+
                       <div>
                         <p className="text-slate-500">Frete rateado</p>
-                        <p className="font-semibold text-slate-800">{formatCurrency(calculated.freight_allocated)}</p>
+                        <p className="font-semibold text-slate-800">
+                          {formatCurrency(calculated.freight_allocated)}
+                        </p>
                       </div>
+
                       <div>
                         <p className="text-slate-500">Crédito rateado</p>
-                        <p className="font-semibold text-emerald-700">- {formatCurrency(calculated.discount_allocated)}</p>
+                        <p className="font-semibold text-emerald-700">
+                          - {formatCurrency(calculated.discount_allocated)}
+                        </p>
                       </div>
+
                       <div>
                         <p className="text-slate-500">Custo final/un.</p>
-                        <p className="font-bold text-slate-800">{formatCurrency(calculated.final_unit_cost)}</p>
+                        <p className="font-bold text-slate-800">
+                          {formatCurrency(calculated.final_unit_cost)}
+                        </p>
                       </div>
                     </div>
                   )}
 
-                  {items.length > 1 && (
+                  {!structuralLocked && items.length > 1 && (
                     <div className="col-span-2 flex justify-end">
                       <button
                         type="button"
@@ -499,39 +801,41 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
 
         <div className="grid sm:grid-cols-2 gap-3">
           <div className="form-group">
-            <label className="label">Frete da chegada</label>
+            <label className="label">Frete da compra</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                R$
+              </span>
               <input
                 type="text"
                 inputMode="numeric"
                 className="input pl-8"
                 placeholder="0,00"
                 value={freightCost}
-                onChange={e => setFreightCost(maskCurrency(e.target.value.replace(/\D/g, '')))}
+                onChange={e => setFreightCost(
+                  maskCurrency(e.target.value.replace(/\D/g, ''))
+                )}
               />
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Rateado entre os produtos proporcionalmente ao valor informado.
-            </p>
           </div>
 
           <div className="form-group">
             <label className="label">Descontos / créditos</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">R$</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                R$
+              </span>
               <input
                 type="text"
                 inputMode="numeric"
                 className="input pl-8"
                 placeholder="0,00"
                 value={discountCredit}
-                onChange={e => setDiscountCredit(maskCurrency(e.target.value.replace(/\D/g, '')))}
+                onChange={e => setDiscountCredit(
+                  maskCurrency(e.target.value.replace(/\D/g, ''))
+                )}
               />
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Ex.: crédito de reposição, desconto comercial ou ajuste da NF.
-            </p>
           </div>
 
           <div className="form-group sm:col-span-2">
@@ -558,29 +862,302 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
 
           <div className="flex justify-between items-center text-sm text-slate-600">
             <span>Descontos / créditos</span>
-            <span className="currency text-emerald-700">- {formatCurrency(discountTotal)}</span>
-          </div>
-
-          <div className="flex justify-between items-center text-sm text-slate-600">
-            <span>Vazios que serão baixados</span>
-            <span>{totalQuantity}</span>
+            <span className="currency text-emerald-700">
+              - {formatCurrency(discountTotal)}
+            </span>
           </div>
 
           <div className="border-t border-slate-200 pt-2 flex justify-between items-center">
-            <span className="text-sm text-slate-600 font-medium">Total líquido da compra</span>
-            <span className="font-bold text-lg text-slate-800">{formatCurrency(total)}</span>
+            <span className="text-sm text-slate-600 font-medium">
+              Total líquido da compra
+            </span>
+            <span className="font-bold text-lg text-slate-800">
+              {formatCurrency(total)}
+            </span>
           </div>
         </div>
 
+        {!isEditing && (
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-900">
+            Ao salvar, a compra ficará em <strong>Aguardando entrega</strong>.
+            Nenhum estoque será alterado neste momento.
+          </div>
+        )}
+
         <div className="flex gap-2 justify-end">
-          <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            Cancelar
+          </button>
+
           <button type="submit" className="btn-primary" disabled={submitting}>
             {submitting
-              ? (isEditing ? 'Salvando...' : 'Registrando...')
-              : (isEditing ? 'Salvar alterações' : 'Registrar Chegada')}
+              ? 'Salvando...'
+              : isEditing
+                ? 'Salvar alterações'
+                : 'Registrar Compra'}
           </button>
         </div>
       </form>
+    </Modal>
+  )
+}
+
+function ReceiptModal({
+  open,
+  purchase,
+  companyId,
+  userId,
+  onClose,
+  onSuccess,
+}) {
+  const [rows, setRows] = useState([])
+  const [receivedAt, setReceivedAt] = useState(
+    new Date().toISOString().slice(0, 16)
+  )
+  const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!open || !purchase) return
+
+    setReceivedAt(formatDateTimeInput(new Date()))
+    setNotes('')
+
+    setRows(
+      (purchase.purchase_items || []).map(item => {
+        const ordered = Number(item.quantity || 0)
+        const alreadyReceived = Number(item.received_quantity || 0)
+        const remaining = Math.max(0, ordered - alreadyReceived)
+
+        return {
+          purchase_item_id: item.id,
+          product_name: item.product_name,
+          ordered,
+          already_received: alreadyReceived,
+          remaining,
+          receive_quantity: remaining,
+        }
+      })
+    )
+  }, [open, purchase])
+
+  const receivingNow = rows.reduce(
+    (sum, row) => sum + Number(row.receive_quantity || 0),
+    0
+  )
+
+  const remainingAfter = rows.reduce(
+    (sum, row) => (
+      sum + Math.max(
+        0,
+        Number(row.remaining || 0) - Number(row.receive_quantity || 0)
+      )
+    ),
+    0
+  )
+
+  function setQuantity(index, value) {
+    setRows(prev => {
+      const updated = [...prev]
+      const row = updated[index]
+      const quantity = Math.max(
+        0,
+        Math.min(
+          Number(row.remaining || 0),
+          Number(value || 0)
+        )
+      )
+
+      updated[index] = {
+        ...row,
+        receive_quantity: quantity,
+      }
+
+      return updated
+    })
+  }
+
+  async function handleConfirm() {
+    if (receivingNow <= 0) {
+      toast.error('Informe ao menos uma quantidade recebida.')
+      return
+    }
+
+    const invalid = rows.some(row => (
+      Number(row.receive_quantity || 0) < 0
+      || Number(row.receive_quantity || 0) > Number(row.remaining || 0)
+    ))
+
+    if (invalid) {
+      toast.error('Há uma quantidade recebida maior que o restante do pedido.')
+      return
+    }
+
+    setSubmitting(true)
+
+    const { data, error } = await stockService.receivePurchase({
+      purchase_id: purchase.id,
+      company_id: companyId,
+      received_at: new Date(receivedAt).toISOString(),
+      received_by: userId,
+      notes,
+      items: rows
+        .filter(row => Number(row.receive_quantity || 0) > 0)
+        .map(row => ({
+          purchase_item_id: row.purchase_item_id,
+          quantity: Number(row.receive_quantity || 0),
+        })),
+    })
+
+    setSubmitting(false)
+
+    if (error) {
+      toast.error(error.message || 'Erro ao confirmar chegada.')
+      return
+    }
+
+    onSuccess(data)
+  }
+
+  const isPartial = remainingAfter > 0
+
+  return (
+    <Modal
+      open={open}
+      onClose={submitting ? undefined : onClose}
+      title={
+        purchase?.delivery_status === 'partial'
+          ? `Receber restante — Compra #${purchase?.purchase_number || ''}`
+          : `Confirmar chegada — Compra #${purchase?.purchase_number || ''}`
+      }
+      maxWidth="max-w-2xl"
+    >
+      <div className="space-y-4">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="font-semibold text-slate-900">
+            {purchase?.supplier_name || 'Fornecedor'}
+          </p>
+
+          {purchase?.expected_delivery_date && (
+            <p className="text-xs text-slate-500 mt-1">
+              Previsão: {formatDateOnlyBR(purchase.expected_delivery_date)}
+            </p>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label className="label">Data/Hora do recebimento</label>
+          <input
+            type="datetime-local"
+            className="input"
+            value={receivedAt}
+            onChange={e => setReceivedAt(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-3">
+          {rows.map((row, index) => (
+            <div
+              key={row.purchase_item_id}
+              className="rounded-xl border border-slate-200 p-3"
+            >
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <p className="font-semibold text-slate-900">
+                    {row.product_name}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Pedido: {row.ordered} • Já recebido: {row.already_received} • Restante: {row.remaining}
+                  </p>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="label">Recebido agora</label>
+                <input
+                  type="number"
+                  min="0"
+                  max={row.remaining}
+                  className="input"
+                  value={row.receive_quantity}
+                  disabled={row.remaining === 0}
+                  onChange={e => setQuantity(index, e.target.value)}
+                />
+
+                {Number(row.receive_quantity || 0) < Number(row.remaining || 0) && (
+                  <p className="text-xs text-amber-700 mt-1 font-medium">
+                    Após este recebimento ainda faltarão{' '}
+                    {Number(row.remaining || 0) - Number(row.receive_quantity || 0)}.
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {isPartial ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="flex gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <strong>Recebimento parcial.</strong> Depois desta confirmação ainda
+                faltarão <strong>{remainingAfter}</strong> botijões.
+                A compra continuará aberta e aparecerá o botão <strong>Receber restante</strong>.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            Todo o restante do pedido será recebido e a compra será marcada como
+            <strong> Recebida</strong>.
+          </div>
+        )}
+
+        <div className="form-group">
+          <label className="label">Observações do recebimento</label>
+          <textarea
+            className="input resize-none"
+            rows={2}
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Ex.: fornecedor ficou devendo 2 P13..."
+          />
+        </div>
+
+        <div className="rounded-xl bg-slate-100 p-3 flex items-center justify-between">
+          <span className="text-sm text-slate-600">
+            Botijões recebidos agora
+          </span>
+          <span className="font-bold text-lg text-slate-900">
+            {receivingNow}
+          </span>
+        </div>
+
+        <div className="flex gap-2 justify-end">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleConfirm}
+            disabled={submitting || receivingNow <= 0}
+          >
+            <PackageCheck className="w-4 h-4" />
+            {submitting
+              ? 'Confirmando...'
+              : purchase?.delivery_status === 'partial'
+                ? 'Receber restante'
+                : 'Confirmar chegada'}
+          </button>
+        </div>
+      </div>
     </Modal>
   )
 }
