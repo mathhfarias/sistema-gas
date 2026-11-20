@@ -573,7 +573,6 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   ])
   const [notes, setNotes] = useState('')
   const [freightCost, setFreightCost] = useState('0,00')
-  const [discountCredit, setDiscountCredit] = useState('0,00')
   const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().slice(0, 16))
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -609,9 +608,6 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       setFreightCost(
         maskCurrency(String(Math.round(Number(purchase.freight_cost || 0) * 100)))
       )
-      setDiscountCredit(
-        maskCurrency(String(Math.round(Number(purchase.discount_credit || 0) * 100)))
-      )
       setPurchasedAt(formatDateTimeInput(purchase.purchased_at))
       setExpectedDeliveryDate(
         String(purchase.expected_delivery_date || '').slice(0, 10)
@@ -626,6 +622,9 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
           product_total: maskCurrency(
             String(Math.round(Number(item.total_cost || 0) * 100))
           ),
+          discount_amount: maskCurrency(
+            String(Math.round(Number(item.discount_allocated || 0) * 100))
+          ),
         }))
       )
     } else {
@@ -639,11 +638,11 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
           quantity: 1,
           received_quantity: 0,
           product_total: '',
+          discount_amount: '0,00',
         },
       ])
       setNotes('')
       setFreightCost('0,00')
-      setDiscountCredit('0,00')
       setPurchasedAt(new Date().toISOString().slice(0, 16))
       setExpectedDeliveryDate('')
     }
@@ -675,12 +674,14 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   const normalizedItems = items.map(item => {
     const quantity = Number(item.quantity || 0)
     const productTotal = parseCurrency(item.product_total)
+    const discountAmount = parseCurrency(item.discount_amount)
 
     return {
       ...item,
       quantity,
       product_total: productTotal,
       total_cost: productTotal,
+      discount_amount: discountAmount,
       unit_cost: quantity > 0 ? productTotal / quantity : 0,
     }
   })
@@ -690,11 +691,13 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
     0
   )
   const freightTotal = parseCurrency(freightCost)
-  const discountTotal = parseCurrency(discountCredit)
+  const discountTotal = normalizedItems.reduce(
+    (sum, item) => sum + Number(item.discount_amount || 0),
+    0
+  )
   const total = itemsTotal + freightTotal - discountTotal
 
   let freightAllocatedSoFar = 0
-  let discountAllocatedSoFar = 0
 
   const calculatedItems = normalizedItems.map((item, idx) => {
     const isLast = idx === normalizedItems.length - 1
@@ -704,12 +707,9 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       ? Number((freightTotal - freightAllocatedSoFar).toFixed(2))
       : Number((freightTotal * ratio).toFixed(2))
 
-    const discountAllocated = isLast
-      ? Number((discountTotal - discountAllocatedSoFar).toFixed(2))
-      : Number((discountTotal * ratio).toFixed(2))
+    const discountAllocated = Number(item.discount_amount || 0)
 
     freightAllocatedSoFar += freightAllocated
-    discountAllocatedSoFar += discountAllocated
 
     const finalTotalCost =
       item.product_total + freightAllocated - discountAllocated
@@ -744,7 +744,17 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       return
     }
 
-    if (discountTotal < 0 || total < 0) {
+    if (normalizedItems.some(item => Number(item.discount_amount || 0) < 0)) {
+      toast.error('Descontos/créditos dos itens não podem ser negativos')
+      return
+    }
+
+    if (calculatedItems.some(item => Number(item.final_total_cost || 0) < 0)) {
+      toast.error('O desconto/crédito de um item não pode deixar seu custo final negativo')
+      return
+    }
+
+    if (total < 0) {
       toast.error(
         'Descontos/créditos não podem deixar o custo líquido da compra negativo'
       )
@@ -866,6 +876,7 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
                     quantity: 1,
                     received_quantity: 0,
                     product_total: '',
+                    discount_amount: '0,00',
                   },
                 ])}
               >
@@ -938,6 +949,30 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
                         required
                       />
                     </div>
+                  </div>
+
+                  <div className="form-group col-span-2">
+                    <label className="label">Desconto / crédito do item</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                        R$
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="input pl-8"
+                        placeholder="0,00"
+                        value={item.discount_amount || '0,00'}
+                        onChange={e => setItem(
+                          idx,
+                          'discount_amount',
+                          maskCurrency(e.target.value.replace(/\D/g, ''))
+                        )}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Informe somente o desconto/crédito que pertence a este produto.
+                    </p>
                   </div>
 
                   {Number(item.received_quantity || 0) > 0 && (
@@ -1017,22 +1052,13 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
           </div>
 
           <div className="form-group">
-            <label className="label">Descontos / créditos</label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
-                R$
-              </span>
-              <input
-                type="text"
-                inputMode="numeric"
-                className="input pl-8"
-                placeholder="0,00"
-                value={discountCredit}
-                onChange={e => setDiscountCredit(
-                  maskCurrency(e.target.value.replace(/\D/g, ''))
-                )}
-              />
+            <label className="label">Total de descontos / créditos</label>
+            <div className="input bg-slate-50 text-emerald-700 font-semibold flex items-center">
+              {formatCurrency(discountTotal)}
             </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Soma automática dos descontos/créditos informados em cada produto.
+            </p>
           </div>
 
           <div className="form-group sm:col-span-2">
