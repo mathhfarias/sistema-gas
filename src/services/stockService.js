@@ -94,14 +94,12 @@ export const stockService = {
   },
 
   /**
-   * Registra chegada de gás (compra).
+   * Registra uma compra/pedido de gás.
    *
-   * Regra atual:
-   * - Entrada de cheios: full_qty aumenta.
-   * - Vazios devolvidos no ato da compra: empty_qty diminui.
-   * - Frete fica registrado na compra e entra no custo total da chegada.
-   *
-   * Para troca enviada antes ao fornecedor, usar receiveFromExchange().
+   * IMPORTANTE:
+   * - salvar a compra NÃO movimenta estoque;
+   * - o estoque muda somente em receivePurchase();
+   * - delivery_status nasce como "ordered".
    */
   async registerPurchase(payload) {
     const {
@@ -111,6 +109,7 @@ export const stockService = {
       items,
       notes,
       purchased_at,
+      expected_delivery_date = null,
       freight_cost = 0,
       discount_credit = 0,
       created_by,
@@ -127,7 +126,7 @@ export const stockService = {
     }
 
     if (costs.discount < 0 || costs.totalCost < 0) {
-      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da chegada negativo.' } }
+      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da compra negativo.' } }
     }
 
     const { data: purchase, error: purchaseError } = await supabase
@@ -141,6 +140,9 @@ export const stockService = {
         discount_credit: costs.discount,
         notes,
         purchased_at: purchased_at || new Date().toISOString(),
+        expected_delivery_date,
+        delivery_status: 'ordered',
+        received_at: null,
         created_by,
       })
       .select()
@@ -153,13 +155,14 @@ export const stockService = {
       product_id: item.product_id,
       product_name: item.product_name,
       quantity: item.quantity,
+      received_quantity: 0,
       unit_cost: item.unit_cost,
       total_cost: item.total_cost,
       freight_allocated: item.freight_allocated,
       discount_allocated: item.discount_allocated,
       final_total_cost: item.final_total_cost,
       final_unit_cost: item.final_unit_cost,
-      empty_returned: item.quantity,
+      empty_returned: 0,
     }))
 
     const { error: itemsError } = await supabase
@@ -168,31 +171,15 @@ export const stockService = {
 
     if (itemsError) return { error: itemsError }
 
-    for (const item of costs.items) {
-      const { error } = await supabase.from('stock_movements').insert({
-        company_id,
-        product_id: item.product_id,
-        type: 'purchase',
-        full_qty_change: item.quantity,
-        empty_qty_change: -item.quantity,
-        exchange_qty_change: 0,
-        reference_id: purchase.id,
-        reference_type: 'purchase',
-        performed_by: created_by,
-      })
-
-      if (error) return { error }
-    }
-
     return { data: purchase, error: null }
   },
+
   /**
-   * Altera uma chegada já registrada e ajusta o estoque pela diferença.
+   * Altera os dados financeiros/operacionais da compra.
    *
-   * Regra operacional:
-   * - Cada item recebido aumenta cheios pela quantidade recebida.
-   * - A mesma quantidade recebida baixa vazios automaticamente.
-   * - Ao editar, não revertemos tudo; calculamos a diferença por produto para evitar estoque negativo temporário.
+   * Enquanto nada foi recebido, produto/quantidade podem mudar.
+   * Depois do primeiro recebimento, produto/quantidade ficam imutáveis
+   * para não invalidar o histórico físico do estoque.
    */
   async updatePurchase(payload) {
     const {
@@ -203,13 +190,13 @@ export const stockService = {
       items,
       notes,
       purchased_at,
+      expected_delivery_date = null,
       freight_cost = 0,
       discount_credit = 0,
-      created_by,
     } = payload
 
     if (!purchase_id) {
-      return { error: { message: 'Compra/chegada não informada.' } }
+      return { error: { message: 'Compra não informada.' } }
     }
 
     const costs = allocatePurchaseCosts(items, freight_cost, discount_credit)
@@ -224,69 +211,45 @@ export const stockService = {
     }
 
     if (costs.discount < 0 || costs.totalCost < 0) {
-      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da chegada negativo.' } }
+      return { error: { message: 'Descontos/créditos não podem deixar o custo líquido da compra negativo.' } }
     }
 
-    // Estoque só muda quando produto ou quantidade mudarem.
     const { data: oldItems, error: oldItemsError } = await supabase
       .from('purchase_items')
-      .select('product_id, quantity')
+      .select('id, product_id, quantity, received_quantity')
       .eq('purchase_id', purchase_id)
 
     if (oldItemsError) return { error: oldItemsError }
 
-    const currentByProduct = new Map()
-    for (const item of oldItems || []) {
-      const key = item.product_id
-      const quantity = normalizeQuantity(item.quantity)
-      const current = currentByProduct.get(key) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-      current.full += quantity
-      current.empty -= quantity
-      currentByProduct.set(key, current)
-    }
+    const hasReceipt = (oldItems || []).some(
+      item => normalizeQuantity(item.received_quantity) > 0
+    )
 
-    const desiredByProduct = new Map()
-    for (const item of normalizedItems) {
-      const key = item.product_id
-      const current = desiredByProduct.get(key) || {
-        product_id: item.product_id,
-        product_name: item.product_name,
-        full: 0,
-        empty: 0,
-        exchange: 0,
-        hub: 0,
+    if (hasReceipt) {
+      if (normalizedItems.length !== (oldItems || []).length) {
+        return {
+          error: {
+            message: 'Depois do primeiro recebimento não é possível adicionar ou remover produtos da compra.',
+          },
+        }
       }
-      current.full += item.quantity
-      current.empty -= item.quantity
-      desiredByProduct.set(key, current)
-    }
 
-    const productIds = new Set([...currentByProduct.keys(), ...desiredByProduct.keys()])
+      const oldById = new Map((oldItems || []).map(item => [item.id, item]))
 
-    for (const productId of productIds) {
-      const current = currentByProduct.get(productId) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-      const desired = desiredByProduct.get(productId) || { full: 0, empty: 0, exchange: 0, hub: 0 }
-      const fullDiff = desired.full - current.full
-      const emptyDiff = desired.empty - current.empty
-      const exchangeDiff = desired.exchange - current.exchange
-      const hubDiff = desired.hub - current.hub
+      for (const item of normalizedItems) {
+        const old = oldById.get(item.id)
 
-      if (fullDiff || emptyDiff || exchangeDiff || hubDiff) {
-        const { error: movementError } = await supabase.from('stock_movements').insert({
-          company_id,
-          product_id: productId,
-          type: 'adjustment',
-          full_qty_change: fullDiff,
-          empty_qty_change: emptyDiff,
-          exchange_qty_change: exchangeDiff,
-          hub_pending_qty_change: hubDiff,
-          reference_id: purchase_id,
-          reference_type: 'purchase_edit',
-          reason: 'Ajuste automático por alteração de quantidade/produto da chegada de gás',
-          performed_by: created_by,
-        })
-
-        if (movementError) return { error: movementError }
+        if (
+          !old
+          || old.product_id !== item.product_id
+          || normalizeQuantity(old.quantity) !== normalizeQuantity(item.quantity)
+        ) {
+          return {
+            error: {
+              message: 'Depois do primeiro recebimento não é possível alterar produto ou quantidade pedida.',
+            },
+          }
+        }
       }
     }
 
@@ -300,6 +263,7 @@ export const stockService = {
         discount_credit: costs.discount,
         notes,
         purchased_at: purchased_at || new Date().toISOString(),
+        expected_delivery_date,
         updated_at: new Date().toISOString(),
       })
       .eq('id', purchase_id)
@@ -307,34 +271,82 @@ export const stockService = {
 
     if (purchaseError) return { error: purchaseError }
 
-    const { error: deleteItemsError } = await supabase
-      .from('purchase_items')
-      .delete()
-      .eq('purchase_id', purchase_id)
+    if (hasReceipt) {
+      for (const item of normalizedItems) {
+        const { error } = await supabase
+          .from('purchase_items')
+          .update({
+            product_name: item.product_name,
+            unit_cost: item.unit_cost,
+            total_cost: item.total_cost,
+            freight_allocated: item.freight_allocated,
+            discount_allocated: item.discount_allocated,
+            final_total_cost: item.final_total_cost,
+            final_unit_cost: item.final_unit_cost,
+          })
+          .eq('id', item.id)
+          .eq('purchase_id', purchase_id)
 
-    if (deleteItemsError) return { error: deleteItemsError }
+        if (error) return { error }
+      }
+    } else {
+      const { error: deleteItemsError } = await supabase
+        .from('purchase_items')
+        .delete()
+        .eq('purchase_id', purchase_id)
 
-    const purchaseItems = normalizedItems.map(item => ({
-      purchase_id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      unit_cost: item.unit_cost,
-      total_cost: item.total_cost,
-      freight_allocated: item.freight_allocated,
-      discount_allocated: item.discount_allocated,
-      final_total_cost: item.final_total_cost,
-      final_unit_cost: item.final_unit_cost,
-      empty_returned: item.quantity,
-    }))
+      if (deleteItemsError) return { error: deleteItemsError }
 
-    const { error: itemsError } = await supabase
-      .from('purchase_items')
-      .insert(purchaseItems)
+      const purchaseItems = normalizedItems.map(item => ({
+        purchase_id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        received_quantity: 0,
+        unit_cost: item.unit_cost,
+        total_cost: item.total_cost,
+        freight_allocated: item.freight_allocated,
+        discount_allocated: item.discount_allocated,
+        final_total_cost: item.final_total_cost,
+        final_unit_cost: item.final_unit_cost,
+        empty_returned: 0,
+      }))
 
-    if (itemsError) return { error: itemsError }
+      const { error: itemsError } = await supabase
+        .from('purchase_items')
+        .insert(purchaseItems)
+
+      if (itemsError) return { error: itemsError }
+    }
 
     return { data: { id: purchase_id }, error: null }
+  },
+
+  /**
+   * Confirma um recebimento físico (total ou parcial).
+   * A função SQL executa histórico + estoque + status atomicamente.
+   */
+  async receivePurchase({
+    purchase_id,
+    company_id,
+    received_at,
+    items,
+    received_by,
+    notes,
+  }) {
+    const { data, error } = await supabase.rpc(
+      'receive_purchase_delivery',
+      {
+        p_purchase_id: purchase_id,
+        p_company_id: company_id,
+        p_received_at: received_at || new Date().toISOString(),
+        p_items: items || [],
+        p_received_by: received_by,
+        p_notes: notes || null,
+      }
+    )
+
+    return { data, error }
   },
 
   /**
@@ -365,7 +377,7 @@ export const stockService = {
 
     const { data: oldItems, error: itemsError } = await supabase
       .from('purchase_items')
-      .select('product_id, quantity')
+      .select('product_id, received_quantity')
       .eq('purchase_id', purchase_id)
 
     if (itemsError) return { error: itemsError }
@@ -373,7 +385,7 @@ export const stockService = {
     const byProduct = new Map()
     for (const item of oldItems || []) {
       if (!item.product_id) continue
-      const quantity = normalizeQuantity(item.quantity)
+      const quantity = normalizeQuantity(item.received_quantity)
       if (quantity <= 0) continue
       byProduct.set(item.product_id, (byProduct.get(item.product_id) || 0) + quantity)
     }
