@@ -573,6 +573,7 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
   ])
   const [notes, setNotes] = useState('')
   const [freightCost, setFreightCost] = useState('0,00')
+  const [orderDiscount, setOrderDiscount] = useState('0,00')
   const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().slice(0, 16))
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -608,6 +609,21 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       setFreightCost(
         maskCurrency(String(Math.round(Number(purchase.freight_cost || 0) * 100)))
       )
+
+      const persistedItemDiscounts = (purchase.purchase_items || []).reduce(
+        (sum, item) => sum + Number(item.discount_allocated || 0),
+        0
+      )
+
+      const persistedOrderDiscount = Math.max(
+        0,
+        Number(purchase.discount_credit || 0) - persistedItemDiscounts
+      )
+
+      setOrderDiscount(
+        maskCurrency(String(Math.round(persistedOrderDiscount * 100)))
+      )
+
       setPurchasedAt(formatDateTimeInput(purchase.purchased_at))
       setExpectedDeliveryDate(
         String(purchase.expected_delivery_date || '').slice(0, 10)
@@ -643,6 +659,7 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       ])
       setNotes('')
       setFreightCost('0,00')
+      setOrderDiscount('0,00')
       setPurchasedAt(new Date().toISOString().slice(0, 16))
       setExpectedDeliveryDate('')
     }
@@ -691,10 +708,14 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
     0
   )
   const freightTotal = parseCurrency(freightCost)
-  const discountTotal = normalizedItems.reduce(
+
+  const itemDiscountTotal = normalizedItems.reduce(
     (sum, item) => sum + Number(item.discount_amount || 0),
     0
   )
+
+  const orderDiscountTotal = parseCurrency(orderDiscount)
+  const discountTotal = itemDiscountTotal + orderDiscountTotal
   const total = itemsTotal + freightTotal - discountTotal
 
   let freightAllocatedSoFar = 0
@@ -770,7 +791,7 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
       items: calculatedItems,
       notes,
       freight_cost: freightTotal,
-      discount_credit: discountTotal,
+      discount_credit: orderDiscountTotal,
       purchased_at: new Date(purchasedAt).toISOString(),
       expected_delivery_date: expectedDeliveryDate || null,
       created_by: userId,
@@ -1052,12 +1073,24 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
           </div>
 
           <div className="form-group">
-            <label className="label">Total de descontos / créditos</label>
-            <div className="input bg-slate-50 text-emerald-700 font-semibold flex items-center">
-              {formatCurrency(discountTotal)}
+            <label className="label">Desconto geral do pedido</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                R$
+              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="input pl-8"
+                placeholder="0,00"
+                value={orderDiscount}
+                onChange={e => setOrderDiscount(
+                  maskCurrency(e.target.value.replace(/\D/g, ''))
+                )}
+              />
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Soma automática dos descontos/créditos informados em cada produto.
+              Ex.: taxa de entrega ou outro desconto aplicado ao valor total do pedido.
             </p>
           </div>
 
@@ -1084,7 +1117,21 @@ function PurchaseModal({ open, purchase, companyId, userId, onClose, onSuccess }
           </div>
 
           <div className="flex justify-between items-center text-sm text-slate-600">
-            <span>Descontos / créditos</span>
+            <span>Descontos / créditos dos produtos</span>
+            <span className="currency text-emerald-700">
+              - {formatCurrency(itemDiscountTotal)}
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center text-sm text-slate-600">
+            <span>Desconto geral do pedido</span>
+            <span className="currency text-emerald-700">
+              - {formatCurrency(orderDiscountTotal)}
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center text-sm font-medium text-slate-700">
+            <span>Descontos totais</span>
             <span className="currency text-emerald-700">
               - {formatCurrency(discountTotal)}
             </span>

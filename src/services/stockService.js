@@ -104,13 +104,15 @@ function allocatePurchaseCosts(items, freightCost = 0, discountCredit = 0) {
     }
   })
 
+  const itemDiscountTotal = roundMoney(
+    calculatedItems.reduce(
+      (sum, item) => sum + Number(item.discount_allocated || 0),
+      0
+    )
+  )
+
   const discount = hasExplicitItemDiscount
-    ? roundMoney(
-        calculatedItems.reduce(
-          (sum, item) => sum + Number(item.discount_allocated || 0),
-          0
-        )
-      )
+    ? roundMoney(itemDiscountTotal + requestedGlobalDiscount)
     : requestedGlobalDiscount
 
   return {
