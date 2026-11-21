@@ -26,21 +26,38 @@ function allocatePurchaseCosts(items, freightCost = 0, discountCredit = 0) {
       (Number(item.unit_cost || 0) * quantity)
     )
 
+    const explicitDiscount = Number(
+      item.discount_amount ??
+      item.discount_allocated ??
+      0
+    )
+
     return {
       ...item,
       quantity,
       total_cost: roundMoney(rawTotal),
+      explicit_discount: roundMoney(explicitDiscount),
     }
   })
 
   const productsTotal = roundMoney(
-    normalizedItems.reduce((sum, item) => sum + Number(item.total_cost || 0), 0)
+    normalizedItems.reduce(
+      (sum, item) => sum + Number(item.total_cost || 0),
+      0
+    )
   )
+
   const freight = roundMoney(freightCost)
-  const discount = roundMoney(discountCredit)
+
+  const hasExplicitItemDiscount = normalizedItems.some(item =>
+    Object.prototype.hasOwnProperty.call(item, 'discount_amount')
+    || Object.prototype.hasOwnProperty.call(item, 'discount_allocated')
+  )
+
+  const requestedGlobalDiscount = roundMoney(discountCredit)
 
   let freightAllocated = 0
-  let discountAllocated = 0
+  let legacyDiscountAllocated = 0
 
   const calculatedItems = normalizedItems.map((item, index) => {
     const isLast = index === normalizedItems.length - 1
@@ -50,16 +67,31 @@ function allocatePurchaseCosts(items, freightCost = 0, discountCredit = 0) {
       ? roundMoney(freight - freightAllocated)
       : roundMoney(freight * ratio)
 
-    const discountShare = isLast
-      ? roundMoney(discount - discountAllocated)
-      : roundMoney(discount * ratio)
-
     freightAllocated = roundMoney(freightAllocated + freightShare)
-    discountAllocated = roundMoney(discountAllocated + discountShare)
 
-    const finalTotal = roundMoney(item.total_cost + freightShare - discountShare)
-    const grossUnit = item.quantity > 0 ? item.total_cost / item.quantity : 0
-    const finalUnit = item.quantity > 0 ? finalTotal / item.quantity : 0
+    let discountShare = 0
+
+    if (hasExplicitItemDiscount) {
+      discountShare = roundMoney(item.explicit_discount)
+    } else {
+      discountShare = isLast
+        ? roundMoney(requestedGlobalDiscount - legacyDiscountAllocated)
+        : roundMoney(requestedGlobalDiscount * ratio)
+
+      legacyDiscountAllocated = roundMoney(
+        legacyDiscountAllocated + discountShare
+      )
+    }
+
+    const finalTotal = roundMoney(
+      item.total_cost + freightShare - discountShare
+    )
+
+    const grossUnit =
+      item.quantity > 0 ? item.total_cost / item.quantity : 0
+
+    const finalUnit =
+      item.quantity > 0 ? finalTotal / item.quantity : 0
 
     return {
       ...item,
@@ -68,9 +100,18 @@ function allocatePurchaseCosts(items, freightCost = 0, discountCredit = 0) {
       discount_allocated: discountShare,
       final_total_cost: finalTotal,
       final_unit_cost: Number(finalUnit.toFixed(4)),
-      empty_returned: item.quantity,
+      empty_returned: item.empty_returned ?? item.received_quantity ?? item.quantity,
     }
   })
+
+  const discount = hasExplicitItemDiscount
+    ? roundMoney(
+        calculatedItems.reduce(
+          (sum, item) => sum + Number(item.discount_allocated || 0),
+          0
+        )
+      )
+    : requestedGlobalDiscount
 
   return {
     items: calculatedItems,
